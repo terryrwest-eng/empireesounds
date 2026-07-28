@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Empire Sounds — Car Audio, Cameras &amp; Installation | Perris, CA</title>
 <meta name="description" content="Car audio installation in Perris, CA. Subwoofers, amps, component speakers, CarPlay head units, backup and dash cameras, sound deadening. 4.8 stars from 75 reviews. 3895 N Perris Blvd. Call (951) 605-2352.">
-<meta name="theme-color" content="#090C13">
+<meta name="theme-color" content="#14100E">
 <link rel="canonical" href="https://empireesounds-production.up.railway.app/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="business.business">
@@ -33,21 +33,24 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --midnight:#07090F;
-  --panel:#101623;
-  --panel-hi:#161E2E;
-  --chrome-hi:#F2F5FA;
-  --candy:#FF2D4F;
-  --candy-glow:rgba(255,45,79,.35);
-  --bone:#DDE3EC;
-  --ash:#8A94A4;
+  /* warm espresso base — deliberately not black, there is red and yellow in it */
+  --midnight:#14100E;
+  --panel:#1C1714;
+  --panel-hi:#241D18;
+  --chrome-hi:#F8F3EA;
+  /* brushed champagne, replacing the red */
+  --candy:#C9A96B;
+  --candy-hi:#E6D2A6;
+  --candy-glow:rgba(201,169,107,.3);
+  --bone:#F1EADF;
+  --ash:#9C8F80;
 
   --display:"Anton",Impact,"Arial Narrow",sans-serif;
   --body:"Instrument Sans","Helvetica Neue",Arial,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 
   --pad:clamp(1.15rem,4.5vw,5rem);
-  --hair:1px solid rgba(221,227,236,.12);
+  --hair:1px solid rgba(236,226,210,.12);
   --max:1240px;
   --ease:cubic-bezier(.22,1,.36,1);
 }
@@ -60,17 +63,21 @@ body{
   line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;
 }
 img{max-width:100%;display:block}
-::selection{background:var(--candy);color:#fff}
+::selection{background:var(--candy);color:#14100E}
 
-/* film grain over everything */
+/* fine static grain — texture, not a strobe. The old version jittered on a
+   900ms step loop, which read as noise rather than film. */
 body::after{
-  content:"";position:fixed;inset:-50%;z-index:90;pointer-events:none;opacity:.05;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  animation:grain 900ms steps(4) infinite;
+  content:"";position:fixed;inset:0;z-index:90;pointer-events:none;opacity:.028;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
-@keyframes grain{
-  0%{transform:translate(0,0)}25%{transform:translate(-2%,3%)}
-  50%{transform:translate(3%,-2%)}75%{transform:translate(-3%,-3%)}100%{transform:translate(2%,2%)}
+
+/* gold hairline that tracks scroll position */
+.progress{
+  position:fixed;top:0;left:0;height:2px;z-index:100;width:100%;
+  transform:scaleX(var(--p,0));transform-origin:0 50%;
+  background:linear-gradient(90deg,var(--candy),var(--candy-hi));
+  pointer-events:none;
 }
 
 h1,h2,h3{
@@ -83,21 +90,24 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
 .chrome{color:var(--chrome-hi)}
 @supports ((-webkit-background-clip:text) or (background-clip:text)){
   .chrome{
-    background-image:linear-gradient(176deg,
-      #F7FAFF 0%,#B6C0CE 19%,#5A6472 35%,#8C96A6 44%,
-      #FFFFFF 50%,#F2F6FC 54%,#7D8797 63%,#39414E 79%,#C4CDDA 94%,#EEF3FA 100%);
-    background-size:100% 240%;background-position:0 22%;
+    /* warm champagne metal. The old stops ran to #39414E, a near-black that
+       vanished against the page and made letters look sliced in half. */
+    background-image:linear-gradient(174deg,
+      #FFFDF8 0%,#F0E2C4 16%,#C9A96B 34%,#E8D6AE 46%,
+      #FFFFFF 52%,#F6EBD4 58%,#C09A5C 70%,#8A6E3E 84%,#E3D2AE 95%,#FFFBF3 100%);
+    background-size:100% 200%;background-position:0 28%;
     -webkit-background-clip:text;background-clip:text;
     color:transparent;-webkit-text-fill-color:transparent;
-    animation:shine 9s ease-in-out infinite alternate;
+    transition:background-position 1.6s var(--ease);
   }
+  /* the sheen sweeps once when the line arrives, then rests */
+  .reveal.in .chrome,.boot .chrome{background-position:0 72%}
 }
-@keyframes shine{from{background-position:0 8%}to{background-position:0 92%}}
 
 /* outlined ghost type */
 .ghost{
   color:transparent;
-  -webkit-text-stroke:2px rgba(221,227,236,.38);
+  -webkit-text-stroke:2px rgba(236,226,210,.38);
 }
 @media(max-width:640px){.ghost{-webkit-text-stroke-width:1.2px}}
 
@@ -108,14 +118,20 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
 .lede{font-size:clamp(1.05rem,1rem + .45vw,1.28rem);line-height:1.55;color:var(--ash);max-width:56ch}
 
 :where(a,button,input,select,summary):focus-visible{outline:3px solid var(--candy);outline-offset:3px}
-.skip{position:absolute;left:-9999px;background:var(--candy);color:#fff;padding:.75rem 1rem;font-family:var(--mono);font-size:.8rem;z-index:99}
+.skip{position:absolute;left:-9999px;background:var(--candy);color:#14100E;padding:.75rem 1rem;font-family:var(--mono);font-size:.8rem;z-index:99}
 .skip:focus{left:.5rem;top:.5rem}
 
 /* ---------- header ---------- */
 .bar{
   position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:1.25rem;
-  padding:.65rem var(--pad);background:rgba(7,9,15,.88);
-  backdrop-filter:blur(14px);border-bottom:var(--hair);
+  padding:1.15rem var(--pad);background:rgba(20,16,14,.55);
+  backdrop-filter:blur(14px);border-bottom:1px solid transparent;
+  transition:padding .45s var(--ease),background .45s var(--ease),border-color .45s var(--ease);
+}
+/* condenses and solidifies once you leave the hero */
+.bar.stuck{
+  padding:.62rem var(--pad);background:rgba(20,16,14,.92);
+  border-bottom-color:rgba(236,226,210,.12);
 }
 .mark{
   font-family:var(--display);font-weight:400;
@@ -137,7 +153,7 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
 .bar nav a:hover::after{transform:scaleX(1);transform-origin:left}
 .tel{
   font-family:var(--body);font-weight:700;font-size:.88rem;letter-spacing:.02em;
-  background:var(--candy);color:#fff;padding:.62rem 1rem;text-decoration:none;white-space:nowrap;
+  background:var(--candy);color:#14100E;padding:.62rem 1rem;text-decoration:none;white-space:nowrap;
   transition:box-shadow .25s,transform .25s;
 }
 .tel:hover{box-shadow:0 0 24px var(--candy-glow);transform:translateY(-1px)}
@@ -148,8 +164,8 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
   position:relative;
   padding:clamp(3.5rem,10vh,7.5rem) var(--pad) clamp(3rem,7vh,5rem);
   background:
-    radial-gradient(90% 75% at 80% -5%,rgba(255,45,79,.18),transparent 58%),
-    radial-gradient(70% 60% at 0% 105%,rgba(90,110,160,.14),transparent 62%),
+    radial-gradient(90% 75% at 80% -5%,rgba(201,169,107,.13),transparent 58%),
+    radial-gradient(70% 60% at 0% 105%,rgba(150,120,80,.1),transparent 62%),
     var(--midnight);
   border-bottom:var(--hair);
   overflow:hidden;
@@ -163,11 +179,10 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
 .hero-shot{position:relative;margin:0}
 .hero-shot img{
   width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;
-  border:1px solid rgba(221,227,236,.22);
 }
 .hero-shot::before{
   content:"";position:absolute;inset:-14px 14px 14px -14px;z-index:-1;
-  border:1px solid rgba(255,45,79,.4);
+  border:1px solid rgba(201,169,107,.45);
 }
 .hero-shot figcaption{
   font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
@@ -188,19 +203,22 @@ h1 .line > span{display:inline-block}
 .btn{
   display:inline-flex;align-items:center;gap:.5rem;
   font-family:var(--body);font-weight:700;font-size:.92rem;letter-spacing:.04em;
-  text-transform:uppercase;text-decoration:none;padding:.95rem 1.5rem;
-  border:1px solid var(--candy);position:relative;overflow:hidden;
-  transition:color .3s,box-shadow .3s,transform .3s;
+  text-transform:uppercase;text-decoration:none;padding:.95rem 1.6rem;
+  border:1px solid var(--candy);position:relative;overflow:hidden;isolation:isolate;
+  transition:color .4s var(--ease),box-shadow .4s var(--ease),
+             transform .4s var(--ease),letter-spacing .4s var(--ease);
 }
+/* fill wipes in from the left rather than popping */
 .btn::before{
-  content:"";position:absolute;inset:0;background:var(--candy);
-  transform:translateY(101%);transition:transform .35s var(--ease);z-index:-1;
+  content:"";position:absolute;inset:0;z-index:-1;background:var(--candy-hi);
+  transform:scaleX(0);transform-origin:left;transition:transform .45s var(--ease);
 }
-.btn--solid{background:var(--candy);color:#fff}
-.btn--solid:hover{box-shadow:0 0 32px var(--candy-glow);transform:translateY(-2px)}
-.btn--ghost{color:var(--candy);background:transparent;z-index:1}
-.btn--ghost:hover{color:#fff;transform:translateY(-2px)}
-.btn--ghost:hover::before{transform:translateY(0)}
+.btn:hover{transform:translateY(-2px);letter-spacing:.07em}
+.btn:hover::before{transform:scaleX(1)}
+.btn--solid{background:var(--candy);color:#14100E}
+.btn--solid:hover{box-shadow:0 10px 30px -6px var(--candy-glow)}
+.btn--ghost{color:var(--candy);background:transparent}
+.btn--ghost:hover{color:#14100E}
 
 
 /* load choreography */
@@ -214,9 +232,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 /* ---------- marquee ---------- */
 .marquee{
   overflow:hidden;border-bottom:var(--hair);background:var(--panel);
-  padding:.95rem 0;white-space:nowrap;
+  padding:1.05rem 0;white-space:nowrap;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 9%,#000 91%,transparent);
+          mask-image:linear-gradient(90deg,transparent,#000 9%,#000 91%,transparent);
 }
-.marquee-track{display:inline-block;animation:slide 26s linear infinite}
+.marquee-track{display:inline-block;animation:slide 44s linear infinite}
 .marquee span{
   font-family:var(--display);font-weight:400;
   text-transform:uppercase;font-size:clamp(1rem,.9rem + .7vw,1.4rem);
@@ -227,7 +247,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 
 /* ---------- stats ---------- */
 .stats{
-  display:grid;gap:1px;background:rgba(221,227,236,.12);
+  display:grid;gap:1px;background:rgba(236,226,210,.12);
   grid-template-columns:repeat(auto-fit,minmax(min(50%,180px),1fr));
   border-bottom:var(--hair);
 }
@@ -248,18 +268,18 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 .sec-head p{margin:1.2rem 0 0}
 .sec--panel{background:var(--panel);border-top:var(--hair);border-bottom:var(--hair)}
 
-/* scroll reveals */
-.reveal{opacity:0;transform:translateY(36px);transition:opacity .8s var(--ease),transform .8s var(--ease)}
-.reveal.in{opacity:1;transform:none}
-.reveal:nth-child(2){transition-delay:.08s}
-.reveal:nth-child(3){transition-delay:.16s}
-.reveal:nth-child(4){transition-delay:.24s}
-.reveal:nth-child(5){transition-delay:.3s}
-.reveal:nth-child(6){transition-delay:.36s}
+/* scroll reveals — 36px of travel over .8s read as the page lurching;
+   a short rise with a light blur settles instead of slides */
+.reveal{
+  opacity:0;transform:translateY(14px);filter:blur(6px);
+  transition:opacity .65s var(--ease),transform .65s var(--ease),filter .65s var(--ease);
+  transition-delay:calc(var(--i,0) * 70ms);
+}
+.reveal.in{opacity:1;transform:none;filter:none}
 
 /* ---------- custom fits ---------- */
 .fit{
-  background:linear-gradient(105deg,rgba(255,45,79,.1),transparent 55%),var(--panel);
+  background:linear-gradient(105deg,rgba(201,169,107,.07),transparent 55%),var(--panel);
   border-top:var(--hair);border-bottom:var(--hair);
 }
 .fit-in{max-width:var(--max);margin:0 auto;display:grid;gap:clamp(2rem,5vw,4rem)}
@@ -276,8 +296,8 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 
 /* ---------- services ---------- */
 .svc-grid{
-  display:grid;gap:1px;background:rgba(221,227,236,.12);
-  border:1px solid rgba(221,227,236,.12);
+  display:grid;gap:1px;background:rgba(236,226,210,.12);
+  border:1px solid rgba(236,226,210,.12);
   grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));
 }
 .svc{
@@ -304,7 +324,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 .shots{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin:0}
 .shot{
   aspect-ratio:4/3;background:var(--panel-hi);
-  border:1px dashed rgba(221,227,236,.26);
+  border:1px dashed rgba(236,226,210,.26);
   display:flex;align-items:center;justify-content:center;text-align:center;
   font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
   color:var(--ash);padding:1rem;
@@ -314,25 +334,44 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 .shot-photo{margin:0;position:relative}
 .shot-photo img{
   width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;
-  border:1px solid rgba(221,227,236,.22);
 }
 .shot-photo--tall img{aspect-ratio:3/4}
 .shot-photo figcaption{
   font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;
   color:var(--ash);margin:.7rem 0 0;
 }
+/* clipping frame so photos can drift on hover without bleeding over captions */
+.frame{
+  display:block;overflow:hidden;position:relative;
+  border:1px solid rgba(236,226,210,.18);
+  background:var(--panel-hi);
+}
+.frame img{border:0;transition:transform 1.1s var(--ease),filter 1.1s var(--ease)}
+.frame::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(200deg,rgba(201,169,107,.16),transparent 42%);
+  opacity:0;transition:opacity .7s var(--ease);
+}
+.hero-shot:hover .frame img,
+.shot-photo:hover .frame img{transform:scale(1.045);filter:saturate(1.06) brightness(1.04)}
+.hero-shot:hover .frame::after,
+.shot-photo:hover .frame::after{opacity:1}
+/* the offset gold rule slides into register on hover */
+.hero-shot::before{transition:inset .6s var(--ease),border-color .6s var(--ease)}
+.hero-shot:hover::before{inset:-8px 8px 8px -8px;border-color:var(--candy)}
+
 .fit-photo{margin:0}
-.fit-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid rgba(221,227,236,.22)}
+.fit-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid rgba(236,226,210,.22)}
 .fit-photo figcaption{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ash);margin:.7rem 0 0}
 
 /* ---------- reviews ---------- */
-.revs{display:grid;gap:1px;background:rgba(221,227,236,.12);border:1px solid rgba(221,227,236,.12);grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr))}
+.revs{display:grid;gap:1px;background:rgba(236,226,210,.12);border:1px solid rgba(236,226,210,.12);grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr))}
 .rev{background:var(--midnight);padding:clamp(1.6rem,3vw,2.1rem);display:flex;flex-direction:column;gap:1.1rem;transition:background .3s}
 .rev:hover{background:var(--panel-hi)}
 .rev .stars{color:var(--candy);font-size:.9rem;letter-spacing:.22em;margin:0}
 .rev blockquote{margin:0;font-size:1.02rem;line-height:1.55;color:var(--bone)}
 .rev figcaption{font-family:var(--mono);font-size:.7rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ash);margin-top:auto}
-.rev--open{border:1px dashed rgba(221,227,236,.26);background:var(--panel-hi)}
+.rev--open{border:1px dashed rgba(236,226,210,.26);background:var(--panel-hi)}
 .rev--open blockquote{color:var(--ash);font-family:var(--mono);font-size:.8rem;line-height:1.7;letter-spacing:.04em}
 .rev-acts{display:flex;flex-wrap:wrap;gap:.7rem;margin:clamp(1.75rem,3vw,2.5rem) 0 0}
 .rev-note{font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;color:var(--ash);margin:1.25rem 0 0}
@@ -350,7 +389,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 .hours li:first-child{border-top:0}
 .hours .shut{color:var(--ash)}
 .hours .today{color:var(--candy)}
-.map-frame{border:1px solid rgba(221,227,236,.2);aspect-ratio:1/1;background:var(--panel-hi);width:100%}
+.map-frame{border:1px solid rgba(236,226,210,.2);aspect-ratio:1/1;background:var(--panel-hi);width:100%}
 
 /* ---------- footer ---------- */
 .foot{padding:clamp(2.5rem,5vw,3.5rem) var(--pad);border-top:var(--hair)}
@@ -362,17 +401,20 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
-  body::after{animation:none}
-  .chrome{animation:none}
+  .chrome{transition:none}
   .boot,h1 .line > span{animation:none;opacity:1;transform:none}
-  .reveal{opacity:1;transform:none;transition:none}
+  .reveal{opacity:1;transform:none;filter:none;transition:none}
   .marquee-track{animation:none}
-  .btn:hover,.svc:hover,.tel:hover{transform:none}
+  .btn:hover,.svc:hover,.tel:hover,.rev:hover{transform:none}
+  .frame img,.hero-shot::before{transition:none}
+  .hero-shot:hover .frame img,.shot-photo:hover .frame img{transform:none}
+  .progress{display:none}
 }
 </style>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
+<div class="progress" aria-hidden="true"></div>
 
 <header class="bar">
   <a class="mark chrome" href="#top">Empire Sounds</a>
@@ -402,8 +444,8 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
       </div>
     </div>
     <figure class="hero-shot boot d4">
-      <img src="hero.jpg" width="1024" height="768" fetchpriority="high"
-           alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure painted matching Tesla red, in the open trunk of a white Tesla Model 3.">
+      <span class="frame"><img src="hero.jpg" width="1024" height="768" fetchpriority="high"
+           alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure painted matching Tesla red, in the open trunk of a white Tesla Model 3."></span>
       <figcaption>Custom fiberglass enclosure — Tesla Model 3</figcaption>
     </figure>
   </div>
@@ -438,13 +480,13 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
     </div>
     <div class="shots reveal">
       <figure class="shot-photo shot-photo--tall">
-        <img src="door-build.jpg" width="765" height="1024" loading="lazy"
-             alt="Layered birch plywood speaker pod holding two drivers, mounted in a stripped truck door over sound deadening, with a braided wiring loom clipped along the panel.">
+        <span class="frame"><img src="door-build.jpg" width="765" height="1024" loading="lazy"
+             alt="Layered birch plywood speaker pod holding two drivers, mounted in a stripped truck door over sound deadening, with a braided wiring loom clipped along the panel."></span>
         <figcaption>Door build — plywood speaker pod</figcaption>
       </figure>
       <figure class="shot-photo shot-photo--tall">
-        <img src="amp-rack.jpg" width="1200" height="1600" loading="lazy"
-             alt="Show trunk build with an illuminated brass and gold amplifier display under acrylic, navy trim panels, and a subwoofer in the side well.">
+        <span class="frame"><img src="amp-rack.jpg" width="1200" height="1600" loading="lazy"
+             alt="Show trunk build with an illuminated brass and gold amplifier display under acrylic, navy trim panels, and a subwoofer in the side well."></span>
         <figcaption>Amp rack — custom show trunk</figcaption>
       </figure>
     </div>
@@ -532,13 +574,13 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
     </div>
     <div class="shots reveal">
       <figure class="shot-photo">
-        <img src="door-pod.jpg" width="1024" height="559" loading="lazy"
-             alt="Molded and painted door panel in a blue truck holding three speakers, finished to match the factory paint.">
+        <span class="frame"><img src="door-pod.jpg" width="1024" height="559" loading="lazy"
+             alt="Molded and painted door panel in a blue truck holding three speakers, finished to match the factory paint."></span>
         <figcaption>Molded door panel — color matched</figcaption>
       </figure>
       <figure class="shot-photo">
-        <img src="sub-enclosure.jpg" width="1600" height="898" loading="lazy"
-             alt="Blue-lit subwoofer enclosure in a sedan trunk with two amplifiers on a shelf above and an illuminated etched panel below.">
+        <span class="frame"><img src="sub-enclosure.jpg" width="1600" height="898" loading="lazy"
+             alt="Blue-lit subwoofer enclosure in a sedan trunk with two amplifiers on a shelf above and an illuminated etched panel below."></span>
         <figcaption>Sub enclosure — trunk build</figcaption>
       </figure>
     </div>
@@ -669,6 +711,31 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
   var map = {1:0,2:1,3:2,4:3,5:4,6:5,0:6};
   var row = rows[map[d]];
   if(row){ row.classList.add('today'); row.firstElementChild.textContent += ' · today'; }
+
+  // scroll progress + header condense, both off one rAF-throttled listener
+  var bar = document.querySelector('.bar');
+  var prog = document.querySelector('.progress');
+  var ticking = false;
+  function onScroll(){
+    if(ticking) return;
+    ticking = true;
+    requestAnimationFrame(function(){
+      var y = window.scrollY || 0;
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      if(prog) prog.style.setProperty('--p', max > 0 ? (y/max).toFixed(4) : 0);
+      if(bar) bar.classList.toggle('stuck', y > 40);
+      ticking = false;
+    });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+
+  // stagger each group's children so rows cascade instead of arriving together
+  document.querySelectorAll('.shots,.svc-grid,.revs,.stats,.info').forEach(function(group){
+    Array.prototype.forEach.call(group.children, function(child, i){
+      child.style.setProperty('--i', i);
+    });
+  });
 
   // scroll reveals
   var revealEls = document.querySelectorAll('.reveal');
