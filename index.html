@@ -154,7 +154,25 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
   border-bottom:var(--hair);
   overflow:hidden;
 }
-.hero-inner{max-width:var(--max);margin:0 auto;position:relative;z-index:2}
+.hero-inner{
+  max-width:var(--max);margin:0 auto;position:relative;z-index:2;
+  display:grid;gap:clamp(2.5rem,5vw,4rem);align-items:center;
+}
+@media(min-width:1020px){.hero-inner{grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr)}}
+
+.hero-shot{position:relative;margin:0}
+.hero-shot img{
+  width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;
+  border:1px solid rgba(221,227,236,.22);
+}
+.hero-shot::before{
+  content:"";position:absolute;inset:-14px 14px 14px -14px;z-index:-1;
+  border:1px solid rgba(255,45,79,.4);
+}
+.hero-shot figcaption{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ash);margin:.8rem 0 0;
+}
 
 .hero .sub{
   display:block;font-family:var(--mono);font-weight:500;
@@ -162,7 +180,7 @@ h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
   letter-spacing:.16em;color:var(--candy);text-transform:uppercase;
   margin:0 0 1.4rem;
 }
-h1{font-size:clamp(3.4rem,1.2rem + 11.5vw,9.5rem);max-width:13ch}
+h1{font-size:clamp(2.8rem,1rem + 8.8vw,7.4rem);max-width:12ch}
 h1 .line{display:block;overflow:hidden}
 h1 .line > span{display:inline-block}
 .hero .lede{margin:1.7rem 0 0}
@@ -372,6 +390,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
         <a class="btn btn--ghost" href="#visit">Hours &amp; directions</a>
       </div>
     </div>
+    <figure class="hero-shot boot d4">
+      <img src="hero.jpg" width="1024" height="768" fetchpriority="high"
+           alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure painted matching Tesla red, in the open trunk of a white Tesla Model 3.">
+      <figcaption>Custom fiberglass enclosure — Tesla Model 3</figcaption>
+    </figure>
   </div>
 </section>
 
@@ -403,11 +426,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
       </ul>
     </div>
     <div class="shots reveal">
-      <figure class="fit-photo">
-        <img src="hero.jpg" width="890" height="645" loading="lazy"
-             alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure built into the trunk of a white Tesla Model 3, painted in matching Tesla red.">
-        <figcaption>Custom fiberglass build — Tesla Model 3</figcaption>
-      </figure>
+      <div class="shot shot--tall">Install photo<br>3:4 · door build</div>
       <div class="shot shot--tall">Install photo<br>3:4 · amp rack</div>
     </div>
   </div>
