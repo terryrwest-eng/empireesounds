@@ -22,7 +22,15 @@
 <meta name="twitter:image" content="https://REPLACE-WITH-DOMAIN/og.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400..900&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">
+<style>
+@font-face{
+  font-family:"Anton";
+  src:url("Anton-Regular.ttf") format("truetype");
+  font-weight:400;font-style:normal;font-display:swap;
+}
+</style>
+<link rel="preload" href="Anton-Regular.ttf" as="font" type="font/ttf" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">
 <style>
 :root{
   --midnight:#07090F;
@@ -34,7 +42,7 @@
   --bone:#DDE3EC;
   --ash:#8A94A4;
 
-  --display:"Unbounded","Helvetica Neue",Arial,sans-serif;
+  --display:"Anton",Impact,"Arial Narrow",sans-serif;
   --body:"Instrument Sans","Helvetica Neue",Arial,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 
@@ -66,11 +74,11 @@ body::after{
 }
 
 h1,h2,h3{
-  font-family:var(--display);font-weight:800;
-  text-transform:uppercase;line-height:1.02;letter-spacing:-.01em;margin:0;
+  font-family:var(--display);font-weight:400;
+  text-transform:uppercase;line-height:.94;letter-spacing:.012em;margin:0;
 }
-h2{font-size:clamp(1.8rem,1rem + 3.6vw,3.9rem)}
-h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
+h2{font-size:clamp(2.2rem,1.1rem + 4.6vw,4.9rem)}
+h3{font-size:clamp(1.15rem,1rem + .6vw,1.45rem)}
 
 .chrome{color:var(--chrome-hi)}
 @supports ((-webkit-background-clip:text) or (background-clip:text)){
@@ -89,7 +97,7 @@ h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
 /* outlined ghost type */
 .ghost{
   color:transparent;
-  -webkit-text-stroke:1.5px rgba(221,227,236,.4);
+  -webkit-text-stroke:2px rgba(221,227,236,.38);
 }
 @media(max-width:640px){.ghost{-webkit-text-stroke-width:1.2px}}
 
@@ -110,9 +118,9 @@ h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
   backdrop-filter:blur(14px);border-bottom:var(--hair);
 }
 .mark{
-  font-family:var(--display);font-weight:800;
-  text-transform:uppercase;font-size:clamp(.85rem,.75rem + .45vw,1.1rem);
-  text-decoration:none;line-height:1;letter-spacing:0;
+  font-family:var(--display);font-weight:400;
+  text-transform:uppercase;font-size:clamp(1.05rem,.9rem + .6vw,1.35rem);
+  text-decoration:none;line-height:1;letter-spacing:.02em;
 }
 .bar nav{margin-left:auto;display:flex;gap:1.55rem}
 .bar nav a{
@@ -128,7 +136,7 @@ h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
 .bar nav a:hover{color:var(--bone)}
 .bar nav a:hover::after{transform:scaleX(1);transform-origin:left}
 .tel{
-  font-family:var(--mono);font-weight:600;font-size:.8rem;letter-spacing:.03em;
+  font-family:var(--body);font-weight:700;font-size:.88rem;letter-spacing:.02em;
   background:var(--candy);color:#fff;padding:.62rem 1rem;text-decoration:none;white-space:nowrap;
   transition:box-shadow .25s,transform .25s;
 }
@@ -146,11 +154,7 @@ h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
   border-bottom:var(--hair);
   overflow:hidden;
 }
-.hero-inner{
-  max-width:var(--max);margin:0 auto;position:relative;z-index:2;
-  display:grid;gap:clamp(2.5rem,5vw,4rem);align-items:center;
-}
-@media(min-width:1020px){.hero-inner{grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr)}}
+.hero-inner{max-width:var(--max);margin:0 auto;position:relative;z-index:2}
 
 .hero .sub{
   display:block;font-family:var(--mono);font-weight:500;
@@ -158,14 +162,14 @@ h3{font-size:clamp(1rem,.9rem + .5vw,1.2rem);font-weight:700}
   letter-spacing:.16em;color:var(--candy);text-transform:uppercase;
   margin:0 0 1.4rem;
 }
-h1{font-size:clamp(2.3rem,.9rem + 7.6vw,6.4rem);max-width:12ch}
+h1{font-size:clamp(3.4rem,1.2rem + 11.5vw,9.5rem);max-width:13ch}
 h1 .line{display:block;overflow:hidden}
 h1 .line > span{display:inline-block}
 .hero .lede{margin:1.7rem 0 0}
 .acts{display:flex;flex-wrap:wrap;gap:.7rem;margin:2.2rem 0 0}
 .btn{
   display:inline-flex;align-items:center;gap:.5rem;
-  font-family:var(--mono);font-weight:600;font-size:.84rem;letter-spacing:.05em;
+  font-family:var(--body);font-weight:700;font-size:.92rem;letter-spacing:.04em;
   text-transform:uppercase;text-decoration:none;padding:.95rem 1.5rem;
   border:1px solid var(--candy);position:relative;overflow:hidden;
   transition:color .3s,box-shadow .3s,transform .3s;
@@ -180,19 +184,6 @@ h1 .line > span{display:inline-block}
 .btn--ghost:hover{color:#fff;transform:translateY(-2px)}
 .btn--ghost:hover::before{transform:translateY(0)}
 
-.hero-shot{position:relative;margin:0}
-.hero-shot img{
-  width:100%;aspect-ratio:890/645;object-fit:cover;
-  border:1px solid rgba(221,227,236,.22);
-}
-.hero-shot::before{
-  content:"";position:absolute;inset:-14px 14px 14px -14px;z-index:-1;
-  border:1px solid rgba(255,45,79,.4);
-}
-.hero-shot figcaption{
-  font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--ash);margin:.8rem 0 0;
-}
 
 /* load choreography */
 .boot{opacity:0;transform:translateY(28px);animation:boot .9s var(--ease) forwards}
@@ -209,9 +200,9 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 }
 .marquee-track{display:inline-block;animation:slide 26s linear infinite}
 .marquee span{
-  font-family:var(--display);font-weight:700;
-  text-transform:uppercase;font-size:clamp(.82rem,.74rem + .5vw,1.1rem);
-  letter-spacing:.02em;color:var(--bone);padding:0 1.1rem;
+  font-family:var(--display);font-weight:400;
+  text-transform:uppercase;font-size:clamp(1rem,.9rem + .7vw,1.4rem);
+  letter-spacing:.03em;color:var(--bone);padding:0 1.1rem;
 }
 .marquee i{font-style:normal;color:var(--candy);padding:0 .1rem}
 @keyframes slide{to{transform:translateX(-50%)}}
@@ -224,8 +215,8 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 }
 .stat{background:var(--midnight);padding:clamp(1.4rem,3vw,2.1rem) var(--pad)}
 .stat b{
-  display:block;font-family:var(--display);font-weight:800;
-  font-size:clamp(1.4rem,1.05rem + 1.6vw,2.4rem);line-height:1;color:var(--bone);
+  display:block;font-family:var(--display);font-weight:400;
+  font-size:clamp(1.9rem,1.3rem + 2.4vw,3.2rem);line-height:1;color:var(--bone);
 }
 .stat span{
   display:block;font-family:var(--mono);font-size:.68rem;letter-spacing:.13em;
@@ -301,6 +292,9 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
   color:var(--ash);padding:1rem;
 }
 .shot--tall{aspect-ratio:3/4}
+.fit-photo{margin:0}
+.fit-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid rgba(221,227,236,.22)}
+.fit-photo figcaption{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ash);margin:.7rem 0 0}
 
 /* ---------- reviews ---------- */
 .revs{display:grid;gap:1px;background:rgba(221,227,236,.12);border:1px solid rgba(221,227,236,.12);grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr))}
@@ -378,11 +372,6 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
         <a class="btn btn--ghost" href="#visit">Hours &amp; directions</a>
       </div>
     </div>
-    <figure class="hero-shot boot d4">
-      <img src="hero.jpg" width="890" height="645"
-           alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure built into the trunk of a white Tesla Model 3, painted in matching Tesla red.">
-      <figcaption>Custom fiberglass enclosure — Tesla Model 3</figcaption>
-    </figure>
   </div>
 </section>
 
@@ -414,7 +403,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
       </ul>
     </div>
     <div class="shots reveal">
-      <div class="shot shot--tall">Install photo<br>3:4 · door build</div>
+      <figure class="fit-photo">
+        <img src="hero.jpg" width="890" height="645" loading="lazy"
+             alt="Two subwoofers on 45-degree baffles in a custom fiberglass enclosure built into the trunk of a white Tesla Model 3, painted in matching Tesla red.">
+        <figcaption>Custom fiberglass build — Tesla Model 3</figcaption>
+      </figure>
       <div class="shot shot--tall">Install photo<br>3:4 · amp rack</div>
     </div>
   </div>
