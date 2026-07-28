@@ -5,7 +5,7 @@
   "description": "Empire Sounds - car audio and installation, Perris CA",
   "scripts": {
     "start": "node server.js",
-    "test:station": "node station/test/run.js"
+    "test:station": "node station/test/relay.js && node station/test/run.js"
   },
   "engines": {
     "node": ">=18"

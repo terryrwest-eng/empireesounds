@@ -91,7 +91,17 @@ main{padding:0 1rem 3rem;max-width:760px;margin:0 auto}
   background:linear-gradient(180deg,var(--panel-hi),var(--panel));border:var(--hair);
   text-align:center;
 }
+.readout-top{display:flex;align-items:center;justify-content:center;gap:.6rem}
 .readout-label{font:600 .7rem/1 var(--mono);letter-spacing:.22em;color:var(--ash)}
+.fixbadge{
+  font:700 .66rem/1 var(--mono);letter-spacing:.1em;padding:.3rem .45rem;border-radius:5px;
+  background:rgba(156,143,128,.18);color:var(--ash);white-space:nowrap;
+}
+.fixbadge.rtk{background:rgba(127,224,168,.16);color:var(--good)}
+.fixbadge.float{background:rgba(232,177,76,.16);color:var(--warn)}
+.fixbadge.single{background:rgba(126,190,255,.14);color:var(--sky)}
+.fixbadge.none{background:rgba(232,115,90,.16);color:var(--bad)}
+.readout-el{font:500 .95rem/1.4 var(--mono);color:var(--ash);font-variant-numeric:tabular-nums}
 .readout-sta{
   font:600 clamp(2.9rem,15vw,4.6rem)/1.02 var(--mono);
   letter-spacing:-.02em;color:var(--candy-hi);margin:.35rem 0 .1rem;
@@ -165,6 +175,7 @@ label input,label select{margin-top:.3rem}
 
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap}
 .row-gap{display:flex;gap:.5rem;flex-wrap:wrap}
+.spaced{margin-top:.7rem}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin:.5rem 0}
 
 /* ---------- project tab ---------- */
@@ -199,6 +210,15 @@ label input,label select{margin-top:.3rem}
 .logrow-sub{font:500 .74rem/1.5 var(--mono);color:var(--ash);word-break:break-word}
 .logrow-note{font-size:.86rem;margin-top:.2rem}
 .icon-btn{border:0;background:transparent;color:var(--ash);font-size:1.1rem;cursor:pointer;padding:.3rem .4rem;min-height:44px}
+
+.statgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;margin:.7rem 0}
+.stat{background:var(--panel);border:var(--hair);border-radius:10px;padding:.5rem .55rem;min-width:0}
+.stat-wide{grid-column:1/-1}
+.stat-k{display:block;font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ash)}
+.stat-v{display:block;font:600 .92rem/1.3 var(--mono);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
+.stat-v.good{color:var(--good)}
+.stat-v.warn{color:var(--warn)}
+.stat-v.bad{color:var(--bad)}
 
 .ctrlrow{display:flex;gap:.6rem;align-items:center;padding:.6rem .7rem;border-radius:11px;background:var(--panel);border:var(--hair)}
 .ctrlrow-main{flex:1;min-width:0;font:500 .78rem/1.5 var(--mono);color:var(--ash)}

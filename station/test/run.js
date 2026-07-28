@@ -14,7 +14,24 @@ const FIX = path.join(__dirname, 'fixtures');
 execFileSync(process.execPath, [path.join(__dirname, 'make-fixtures.js')], { stdio: 'ignore' });
 const EXP = JSON.parse(fs.readFileSync(path.join(FIX, 'expected.json'), 'utf8'));
 const PORT = Number(process.env.PORT || 3111);
-const BASE = `http://localhost:${PORT}/station/`;
+const BASE = `http://localhost:${PORT}/station/?debug`;
+
+// Independent NMEA checksum, so the fixtures do not lean on the app's own code.
+function nmea(body, corrupt = false) {
+  let c = 0;
+  for (const ch of body) c ^= ch.charCodeAt(0);
+  if (corrupt) c ^= 0xff;
+  return `$${body}*${c.toString(16).toUpperCase().padStart(2, '0')}`;
+}
+// Two RTCM 3 frames back to back, message 1005 then 1074.
+function rtcmBytes() {
+  const frame = (type, len) => {
+    const b = [0xd3, (len >> 8) & 3, len & 0xff, type >> 4, (type & 0xf) << 4];
+    while (b.length < len + 3) b.push(0);
+    return [...b, 1, 2, 3];
+  };
+  return [...frame(1005, 12), ...frame(1074, 20)];
+}
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -48,7 +65,16 @@ const near = (name, got, want, tol) =>
     landxml: fs.readFileSync(path.join(FIX, 'alignment.xml'), 'utf8'),
     dxf: fs.readFileSync(path.join(FIX, 'plan.dxf'), 'utf8'),
     gpx: fs.readFileSync(path.join(FIX, 'track.gpx'), 'utf8'),
-    csv: fs.readFileSync(path.join(FIX, 'points.csv'), 'utf8')
+    csv: fs.readFileSync(path.join(FIX, 'points.csv'), 'utf8'),
+    gga: nmea('GPGGA,120000.00,3348.00000,N,11711.70000,W,4,18,0.6,120.5,M,-33.2,M,1.2,0123'),
+    gst: nmea('GPGST,120000.00,0.010,0.012,0.008,31.0,0.008,0.011,0.019'),
+    single: nmea('GPGGA,120001.00,3348.00000,N,11711.70000,W,1,07,2.4,120.5,M,-33.2,M,,'),
+    badGga: nmea('GPGGA,120002.00,3348.00000,N,11711.70000,W,4,18,0.6,999.9,M,-33.2,M,1.2,0123', true),
+    sourcetable: [
+      'STR;NEAR;Riverside;RTCM 3.2;1005(1),1074(1);2;GPS+GLO;NET;USA;33.90;-117.40;1;0;sNTRIP;none;B;N;9600;',
+      'STR;FAR;Barstow;RTCM 3.0;1004(1);2;GPS;NET;USA;34.90;-117.02;0;0;sNTRIP;none;B;N;9600;'
+    ].join('\r\n'),
+    rtcm: rtcmBytes()
   };
 
   console.log('\n— parsing and stationing —');
@@ -104,6 +130,39 @@ const near = (name, got, want, tol) =>
       k: quadrantBearing(89.9999999), l: quadrantBearing(45.5, { seconds: false })
     };
     out.simplify = { before: 5, after: simplify([[0, 0], [1, 0.001], [2, 0], [3, -0.001], [4, 0]], 0.01).length };
+
+    // ---- NMEA ----
+    const { NmeaReader, NmeaTokenizer, buildGGA, parseLatLon } = await import('./js/nmea.js');
+    const { parseSourcetable, RtcmFramer, casterDistanceKm } = await import('./js/ntrip.js');
+    const fixes = [];
+    const reader = new NmeaReader(f => fixes.push(f));
+    reader.push(t.gst + '\r\n');
+    reader.push(t.gga + '\r\n');
+    reader.push(t.badGga + '\r\n');          // bad checksum, must be ignored
+    reader.push(new Uint8Array([0xb5, 0x62, 0x01, 0x07, 0x5c, 0x00])); // UBX noise
+    reader.push(t.single + '\r\n');
+    out.nmea = {
+      count: fixes.length,
+      first: fixes[0],
+      second: fixes[1],
+      badChecksums: reader.tok.badChecksums,
+      latDM: parseLatLon('3348.00000', 'N'),
+      lonDM: parseLatLon('11711.70000', 'W')
+    };
+    out.gga = buildGGA({ lat: 33.8, lon: -117.195, quality: 4, sats: 18, hdop: 0.6, alt: 120.5, geoidSep: -33.2 });
+
+    // ---- sourcetable + RTCM framing ----
+    const table = parseSourcetable(t.sourcetable);
+    const types = [];
+    const framer = new RtcmFramer(ty => types.push(ty));
+    framer.push(new Uint8Array(t.rtcm));
+    out.ntrip = {
+      mounts: table.map(e => e.mount),
+      needsGga: table.map(e => e.needsGga),
+      format: table[0].format,
+      types,
+      km: Math.round(casterDistanceKm(table[0], 33.80, -117.20))
+    };
     return out;
   }, texts);
 
@@ -153,6 +212,35 @@ const near = (name, got, want, tol) =>
   ok('compact bearing for the tile', r.fmt.l === 'N 45°30\' E', r.fmt.l);
   ok('simplify drops collinear noise', r.simplify.after === 2, String(r.simplify.after));
 
+  // NMEA
+  console.log('\n— receiver —');
+  ok('two valid fixes, the corrupt one dropped', r.nmea.count === 2, String(r.nmea.count));
+  ok('bad checksum counted', r.nmea.badChecksums === 1, String(r.nmea.badChecksums));
+  near('latitude from ddmm.mmmm', r.nmea.latDM, 33.8, 1e-9);
+  near('longitude from dddmm.mmmm', r.nmea.lonDM, -117.195, 1e-9);
+  ok('RTK fixed recognised', r.nmea.first.qualityLabel === 'RTK FIX', r.nmea.first.qualityLabel);
+  near('satellite count', r.nmea.first.sats, 18, 0);
+  near('age of corrections', r.nmea.first.ageOfDiff, 1.2, 1e-9);
+  ok('base id kept', r.nmea.first.baseId === '0123', String(r.nmea.first.baseId));
+  near('orthometric height', r.nmea.first.alt, 120.5, 1e-9);
+  near('ellipsoidal height = orthometric + geoid separation', r.nmea.first.ellipsoidAlt, 87.3, 1e-9);
+  near('accuracy from GST, not from HDOP', r.nmea.first.sigmaH, Math.hypot(0.008, 0.011), 1e-9);
+  ok('accuracy is flagged as coming from GST', r.nmea.first.fromGst === true);
+  ok('single-point fix labelled', r.nmea.second.qualityLabel === 'SINGLE', r.nmea.second.qualityLabel);
+  ok('a stale GST does not make a single fix look centimetre-accurate',
+     r.nmea.second.fromGst === false && r.nmea.second.sigmaH > 1, JSON.stringify({ g: r.nmea.second.fromGst, s: r.nmea.second.sigmaH }));
+  near('fallback accuracy from HDOP', r.nmea.second.sigmaH, 2.4 * 3.0, 1e-9);
+  ok('vertical sigma also dropped with the stale epoch', r.nmea.second.sigmaV == null, String(r.nmea.second.sigmaV));
+  ok('UBX binary in the stream does not derail the parser', r.nmea.count === 2);
+  ok('built GGA is well formed', /^\$GPGGA,\d{6}\.00,3348\.00000,N,11711\.70000,W,4,18,0\.6,120\.50,M,-33\.20,M,,\*[0-9A-F]{2}/.test(r.gga), r.gga);
+
+  // sourcetable + RTCM
+  ok('mountpoints parsed', r.ntrip.mounts.join() === 'NEAR,FAR', r.ntrip.mounts.join());
+  ok('VRS mountpoint flagged as needing GGA', r.ntrip.needsGga[0] === true && r.ntrip.needsGga[1] === false, JSON.stringify(r.ntrip.needsGga));
+  ok('mountpoint format read', r.ntrip.format === 'RTCM 3.2', r.ntrip.format);
+  ok('distance to the base computed', r.ntrip.km >= 20 && r.ntrip.km <= 25, String(r.ntrip.km));
+  ok('RTCM message types framed', r.ntrip.types.join() === '1005,1074', r.ntrip.types.join());
+
   /* ---------------- UI: GPX end to end ---------------- */
   console.log('\n— UI: geographic file —');
   await page.click('.tab[data-tab="project"]');
@@ -178,6 +266,68 @@ const near = (name, got, want, tol) =>
   ok('log row shows the station', (await page.textContent('#logList')).includes(sta.trim()));
   await page.click('.tab[data-tab="track"]');
   await page.screenshot({ path: path.join(__dirname, 'shot-track-gpx.png') });
+
+  /* ---------------- UI: external receiver ---------------- */
+  console.log('\n— UI: RTK receiver ---');
+  await page.click('.tab[data-tab="rover"]');
+  await page.click('#srcSeg .seg-btn[data-source="rover"]');
+  ok('receiver panel shown', await page.isVisible('#roverBlock'));
+
+  const feed = async (...sentences) => {
+    await page.evaluate(lines => window.stationDebug.feedNmea(lines.join('\r\n') + '\r\n'), sentences);
+    await page.waitForTimeout(150);
+  };
+  await feed(texts.gst, texts.gga);
+
+  ok('rover stats appear', await page.isVisible('#roverStats'));
+  ok('solution reads RTK FIX', (await page.textContent('#sQuality')).includes('RTK FIX'), await page.textContent('#sQuality'));
+  ok('sigma shown in centimetres', /1\.4 cm/.test(await page.textContent('#sSigmaH')), await page.textContent('#sSigmaH'));
+  ok('corrections age shown', (await page.textContent('#sAge')).startsWith('1.2'), await page.textContent('#sAge'));
+  ok('ellipsoid height shown', (await page.textContent('#sEllip')).startsWith('87.3'), await page.textContent('#sEllip'));
+
+  await page.click('.tab[data-tab="track"]');
+  const rSta = await page.textContent('#staBig');
+  ok(`rover drives the station readout (${rSta})`, rSta.trim() === sta.trim(), `${rSta} vs ${sta}`);
+  ok('fix badge reads RTK FIX', (await page.textContent('#fixBadge')).trim() === 'RTK FIX', await page.textContent('#fixBadge'));
+  ok('offset is on the centreline', /ON|0\.0\d ft/.test(await page.textContent('#offBig')), await page.textContent('#offBig'));
+  ok('accuracy tile in centimetres', /±1\.4 cm/.test(await page.textContent('#tAcc')), await page.textContent('#tAcc'));
+  ok('satellite tile', (await page.textContent('#tSats')) === '18', await page.textContent('#tSats'));
+  const el0 = await page.textContent('#elBig');
+  ok(`elevation from the receiver (${el0})`, /EL 395\.3\d ft/.test(el0), el0);
+
+  // rod height comes off the elevation
+  await page.click('.tab[data-tab="rover"]');
+  await page.fill('#inpAntenna', '2');
+  await page.dispatchEvent('#inpAntenna', 'change');
+  await feed(texts.gga);
+  await page.click('.tab[data-tab="track"]');
+  const el1 = await page.textContent('#elBig');
+  ok(`rod height subtracted (${el1})`, /EL 393\.3\d ft/.test(el1) && /rod 2 ft/.test(el1), el1);
+
+  await page.fill('#markNote', 'hub & tack');
+  await page.click('#btnMark');
+  ok('rover mark logged', (await page.textContent('#logCount')) === '2');
+  await page.click('.tab[data-tab="log"]');
+  const logText = await page.textContent('#logList');
+  ok('mark records the fix quality', logText.includes('RTK FIX'), logText.slice(0, 160));
+  ok('mark records the elevation', /EL 393\.3/.test(logText), logText.slice(0, 200));
+  await page.click('.tab[data-tab="track"]');
+
+  // corrections dropping out must be visible, not silent
+  await feed(texts.single);
+  const warnText = await page.textContent('#staWarn');
+  ok(`losing RTK is called out (${warnText.slice(0, 60)})`, /corrections are not reaching/i.test(warnText), warnText);
+  ok('badge falls back to SINGLE', (await page.textContent('#fixBadge')).trim() === 'SINGLE', await page.textContent('#fixBadge'));
+  await page.screenshot({ path: path.join(__dirname, 'shot-rover.png') });
+
+  // back to the phone for the rest of the run
+  await page.click('.tab[data-tab="rover"]');
+  await page.click('#srcSeg .seg-btn[data-source="phone"]');
+  await page.click('.tab[data-tab="track"]');
+  ok('the rover reading does not linger after switching source',
+     (await page.textContent('#staBig')).trim() === '—', await page.textContent('#staBig'));
+  await page.click('#btnGps');
+  await page.waitForFunction(() => document.getElementById('staBig').textContent !== '—', null, { timeout: 10000 });
 
   /* ---------------- UI: LandXML + georeferencing ---------------- */
   console.log('\n— UI: grid file + georeference —');
@@ -237,7 +387,7 @@ const near = (name, got, want, tol) =>
   await page.waitForTimeout(500);
   ok('project restored after reload', (await page.textContent('#projectName')).includes('MAIN ST'),
      await page.textContent('#projectName'));
-  ok('marks restored after reload', (await page.textContent('#logCount')) === '1');
+  ok('marks restored after reload', (await page.textContent('#logCount')) === '2');
 
   await page.click('#chkDemo');
   await page.waitForTimeout(1200);

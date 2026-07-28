@@ -4,9 +4,13 @@ import { LocalFrame, fitSimilarity, applySimilarity, azimuth, quadrantBearing, M
 import { Alignment, formatStation, parseStation, formatOffset, simplify, polylineLength } from './alignment.js';
 import { parseFile } from './parse.js';
 import { PlanView } from './map.js';
+import { RoverLink, support } from './rover.js';
+import { NmeaReader, buildGGA } from './nmea.js';
+import { NtripClient, casterDistanceKm } from './ntrip.js';
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = 'station.project.v1';
+const SETTINGS_KEY = 'station.settings.v1';
 const MAX_STORE = 3_500_000;
 
 const UNIT_M = { meter: 1, foot: M_PER_INTL_FT, usfoot: M_PER_US_FT };
@@ -26,7 +30,11 @@ const state = {
   marks: [],
   target: null,
   smooth: true,
-  demo: false
+  demo: false,
+  source: 'phone',     // 'phone' | 'rover'
+  baud: 38400,
+  antenna: 0,          // rod height, in display units
+  ntrip: { host: '', port: 2101, mount: '', user: '', pass: '', tls: false, remember: false }
 };
 
 let view = null;
@@ -164,17 +172,21 @@ async function loadFile(file) {
   }
 }
 
-/* ─────────────────────────── GPS ─────────────────────────── */
+/* ─────────────────────────── position sources ─────────────────────────── */
 
 function startGps() {
+  if (state.source === 'rover') {
+    // The receiver is the position source; the button just re-opens the link.
+    if (!rover.connected) { showTab('rover'); flash($('roverMsg'), 'warn', 'Connect the receiver first.'); }
+    return;
+  }
   if (!navigator.geolocation) return setPill('bad', 'No GPS');
   if (watchId != null) return;
   setPill('warn', 'Acquiring…');
-  watchId = navigator.geolocation.watchPosition(onFix, onGpsError, {
+  watchId = navigator.geolocation.watchPosition(onPhoneFix, onGpsError, {
     enableHighAccuracy: true, maximumAge: 1000, timeout: 30000
   });
-  $('btnGps').textContent = 'Stop GPS';
-  $('btnGps').classList.add('on');
+  setTracking(true);
   requestWake();
 }
 
@@ -182,12 +194,18 @@ function stopGps() {
   if (watchId != null) navigator.geolocation.clearWatch(watchId);
   watchId = null;
   smoothed = null;
-  $('btnGps').textContent = 'Start GPS';
-  $('btnGps').classList.remove('on');
+  setTracking(false);
   setPill('', 'GPS off');
   releaseWake();
   if (!state.demo) { lastFix = null; view.fix = null; view.snap = null; renderAll(); }
 }
+
+function setTracking(on) {
+  $('btnGps').textContent = on ? 'Stop GPS' : 'Start GPS';
+  $('btnGps').classList.toggle('on', on);
+}
+
+function tracking() { return watchId != null || (state.source === 'rover' && rover.connected); }
 
 function onGpsError(err) {
   const map = {
@@ -201,15 +219,23 @@ function onGpsError(err) {
   w.textContent = map[err.code] || err.message;
 }
 
-function onFix(pos) {
+function onPhoneFix(pos) {
   const c = pos.coords;
-  const fix = {
+  applyFix({
     lat: c.latitude, lon: c.longitude, acc: c.accuracy,
     heading: (c.speed != null && c.speed > 0.6) ? c.heading : null,
-    speed: c.speed, ele: c.altitude, t: pos.timestamp
-  };
-  setPill(c.accuracy <= 8 ? 'on' : c.accuracy <= 20 ? 'warn' : 'bad',
-    `±${fmt(c.accuracy, 1)} m`);
+    speed: c.speed, ele: c.altitude, t: pos.timestamp,
+    q: { source: 'phone', label: 'PHONE GPS', rank: 1 }
+  });
+}
+
+/**
+ * The one road every position takes, wherever it came from: phone, rover or
+ * the demo walk. Projects into the local frame, filters, renders.
+ */
+function applyFix(fix) {
+  const label = fix.q?.label || 'GPS';
+  setPill(pillClass(fix), fix.acc != null ? `${label} ±${fmtAcc(fix.acc)}` : label);
 
   if (!state.frame) {
     lastFix = fix;
@@ -217,19 +243,22 @@ function onFix(pos) {
     $('staWarn').textContent = state.file
       ? 'Georeference the alignment (Project tab) before it can be tracked.'
       : 'Load an alignment on the Project tab.';
-    renderTiles();
+    renderReadout(); renderTiles();
     return;
   }
 
   const [rx, ry] = state.frame.toXY(fix.lat, fix.lon);
-  if (state.smooth) {
+  // An RTK fixed solution is already centimetres; filtering it only adds lag.
+  const filter = state.smooth && !(fix.q && fix.q.rank >= 5);
+  if (filter) {
     // Drop the history on a gap or a jump — a filter that lags reality by
     // 70 metres is worse than no filter at all.
     const gap = lastFix ? fix.t - lastFix.t : 0;
-    if (smoothed && (gap > 10000 || Math.hypot(rx - smoothed[0], ry - smoothed[1]) > Math.max(25, fix.acc * 4))) {
+    const acc = fix.acc ?? 5;
+    if (smoothed && (gap > 10000 || Math.hypot(rx - smoothed[0], ry - smoothed[1]) > Math.max(25, acc * 4))) {
       smoothed = null;
     }
-    const a = Math.max(0.15, Math.min(0.85, 6 / Math.max(1, fix.acc)));
+    const a = Math.max(0.15, Math.min(0.85, 6 / Math.max(1, acc)));
     smoothed = smoothed ? [smoothed[0] + (rx - smoothed[0]) * a, smoothed[1] + (ry - smoothed[1]) * a] : [rx, ry];
   } else {
     smoothed = [rx, ry];
@@ -240,6 +269,16 @@ function onFix(pos) {
   renderAll();
 }
 
+function pillClass(fix) {
+  if (fix.q?.rank >= 5) return 'on';
+  if (fix.q?.rank === 4) return 'warn';
+  if (fix.acc == null) return 'warn';
+  return fix.acc <= 8 ? 'on' : fix.acc <= 20 ? 'warn' : 'bad';
+}
+
+// Centimetre accuracies deserve centimetres; a phone's ±14 m does not.
+const fmtAcc = m => (m == null || !isFinite(m)) ? '—' : (m < 1 ? `${(m * 100).toFixed(1)} cm` : `${m.toFixed(1)} m`);
+
 async function requestWake() {
   try {
     if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
@@ -249,6 +288,273 @@ function releaseWake() { try { wakeLock?.release(); } catch {} wakeLock = null; 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && watchId != null && !wakeLock) requestWake();
 });
+
+/* ─────────────────────────── external receiver ─────────────────────────── */
+
+let lastRoverFix = null;   // the raw NMEA fix, kept for the GGA the caster wants
+
+const rover = new RoverLink({
+  onData: chunk => nmea.push(chunk),
+  onStatus: s => onRoverStatus(s)
+});
+
+const nmea = new NmeaReader(fix => onRoverFix(fix));
+
+const ntrip = new NtripClient({
+  onRtcm: bytes => { if (rover.connected) rover.write(bytes); },
+  onStatus: s => onNtripStatus(s),
+  onStats: () => scheduleNtripStats()
+});
+
+function onRoverFix(fix) {
+  lastRoverFix = fix;
+  $('roverStats').hidden = false;
+  renderRoverStats();
+  if (state.source !== 'rover') return;
+  if (!fix.valid) {
+    setPill('bad', fix.meta ? fix.meta.label : 'NO FIX');
+    return;
+  }
+  const ele = fix.alt != null ? fix.alt - antennaMetres() : null;
+  applyFix({
+    lat: fix.lat, lon: fix.lon,
+    acc: fix.accuracy,
+    heading: (fix.speed != null && fix.speed > 0.6) ? fix.course : null,
+    speed: fix.speed,
+    ele,
+    t: Date.now(),
+    q: {
+      source: 'rover', label: fix.qualityLabel, rank: fix.meta.rank, quality: fix.quality,
+      sats: fix.sats, hdop: fix.hdop, pdop: fix.pdop,
+      sigmaH: fix.sigmaH, sigmaV: fix.sigmaV,
+      ageOfDiff: fix.ageOfDiff, baseId: fix.baseId,
+      ellipsoidAlt: fix.ellipsoidAlt, antenna: antennaMetres()
+    }
+  });
+}
+
+function antennaMetres() {
+  const v = Number(state.antenna) || 0;
+  return unitLabel() === 'ft' ? v * M_PER_INTL_FT : v;
+}
+
+function onRoverStatus(s) {
+  const msg = $('roverMsg');
+  if (s.state === 'connected') {
+    flash(msg, 'ok', `Connected to ${s.detail}. Waiting for NMEA…`);
+    $('btnDisconnect').hidden = false;
+    $('roverStats').hidden = false;
+    setTracking(true);
+    requestWake();
+  } else if (s.state === 'connecting') {
+    flash(msg, '', `Opening ${s.detail}…`);
+  } else if (s.state === 'lost') {
+    flash(msg, 'err', `Receiver disconnected: ${s.detail}`);
+    $('btnDisconnect').hidden = true;
+    setTracking(false);
+    setPill('bad', 'Rover lost');
+  } else if (s.state === 'error') {
+    flash(msg, 'err', s.detail);
+  }
+  renderRoverStats();
+}
+
+async function connectRover(kind) {
+  const msg = $('roverMsg');
+  try {
+    if (state.source !== 'rover') setSource('rover');
+    await rover.connect(kind, { baudRate: Number(state.baud) });
+  } catch (err) {
+    // A cancelled chooser is not an error worth shouting about.
+    if (/cancel|no device selected|user gesture/i.test(err.message || '')) { flash(msg, '', 'No device chosen.'); return; }
+    flash(msg, 'err', err.message || String(err));
+  }
+}
+
+async function disconnectRover() {
+  await rover.disconnect();
+  $('btnDisconnect').hidden = true;
+  lastRoverFix = null;
+  setTracking(false);
+  setPill('', 'GPS off');
+  releaseWake();
+  flash($('roverMsg'), '', 'Receiver disconnected.');
+  renderRoverStats();
+}
+
+function setSource(source) {
+  const wasLive = tracking();
+  const changed = state.source !== source;
+  state.source = source;
+  if (changed) {
+    // A position from the old source is history, not a reading. Clear it so the
+    // readout cannot show a stale station as though it were live.
+    lastFix = null; smoothed = null;
+    view.fix = null; view.snap = null;
+    state.lastProjection = null;
+  }
+  document.querySelectorAll('#srcSeg .seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.source === source));
+  $('roverBlock').hidden = source !== 'rover';
+  if (source === 'rover') {
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    setTracking(rover.connected);
+    const missing = [];
+    if (!support.usb) missing.push('USB');
+    if (!support.ble) missing.push('Bluetooth');
+    if (!support.serial) missing.push('serial ports');
+    $('sourceNote').textContent = missing.length === 3
+      ? 'This browser cannot reach an external receiver at all. On iOS that is a platform limit, not a setting — Safari and every iOS browser lack WebUSB and Web Bluetooth.'
+      : missing.length
+        ? `This browser supports ${['USB', 'Bluetooth', 'serial ports'].filter(x => !missing.includes(x)).join(' and ')}. Not available here: ${missing.join(', ')}.`
+        : 'USB, Bluetooth and serial are all available in this browser.';
+    ['btnUsb', 'btnBle', 'btnSerial'].forEach((id, i) => { $(id).disabled = ![support.usb, support.ble, support.serial][i]; });
+  } else {
+    $('sourceNote').textContent = 'The phone\'s own GPS. Metres, not centimetres — fine for finding a station, not for setting one.';
+    setTracking(watchId != null);
+    if (changed && wasLive) startGps(); // keep tracking across the switch
+  }
+  smoothed = null;
+  if (changed) renderAll();
+  save();
+}
+
+/* ─────────────────────────── NTRIP ─────────────────────────── */
+
+function ntripOpts() {
+  const n = state.ntrip;
+  return {
+    host: n.host.trim(), port: Number(n.port) || 2101, mount: n.mount.trim(),
+    user: n.user, pass: n.pass, tls: !!n.tls,
+    // VRS and nearest-base mountpoints need to know where the rover is.
+    gga: () => (lastRoverFix && lastRoverFix.valid ? buildGGA(lastRoverFix) : '')
+  };
+}
+
+async function fetchMountpoints() {
+  const msg = $('ntripMsg');
+  readNtripInputs();
+  if (!state.ntrip.host) return flash(msg, 'err', 'Enter the caster host first.');
+  flash(msg, '', 'Asking the caster for its mountpoint list…');
+  try {
+    const list = await ntrip.sourcetable(ntripOpts());
+    if (!list.length) return flash(msg, 'warn', 'The caster answered, but its table has no mountpoints.');
+    const here = lastRoverFix?.valid ? lastRoverFix : lastFix;
+    list.forEach(e => { e.km = here ? casterDistanceKm(e, here.lat, here.lon) : null; });
+    if (here) list.sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9));
+    renderMountpoints(list);
+    flash(msg, 'ok', `${list.length} mountpoints${here ? ', nearest first' : ''}.`);
+  } catch (err) {
+    flash(msg, 'err', err.message || String(err));
+  }
+}
+
+function renderMountpoints(list) {
+  const wrap = $('mountTable');
+  const datalist = $('mountList');
+  wrap.innerHTML = '';
+  datalist.innerHTML = '';
+  list.slice(0, 60).forEach(e => {
+    datalist.append(Object.assign(document.createElement('option'), { value: e.mount }));
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'linerow' + (e.mount === state.ntrip.mount ? ' is-on' : '');
+    const main = document.createElement('div');
+    main.className = 'linerow-main';
+    const nm = document.createElement('div');
+    nm.className = 'linerow-name';
+    nm.textContent = e.mount;
+    const sub = document.createElement('div');
+    sub.className = 'linerow-sub';
+    sub.textContent = [
+      e.format, e.km != null ? `${e.km.toFixed(1)} km` : null,
+      e.needsGga ? 'VRS (sends GGA)' : null, e.needsAuth ? 'login' : null, e.identifier
+    ].filter(Boolean).join(' · ');
+    main.append(nm, sub);
+    row.append(main);
+    row.onclick = () => {
+      state.ntrip.mount = e.mount;
+      $('ntMount').value = e.mount;
+      renderMountpoints(list);
+      save();
+    };
+    wrap.append(row);
+  });
+}
+
+function toggleNtrip() {
+  const msg = $('ntripMsg');
+  if (ntrip.wanted) { ntrip.disconnect(); return; }
+  readNtripInputs();
+  if (!state.ntrip.host || !state.ntrip.mount) return flash(msg, 'err', 'A caster host and a mountpoint are both needed.');
+  if (!rover.connected) flash(msg, 'warn', 'Corrections will be pulled, but nothing is connected to send them to yet.');
+  $('ntripStats').hidden = false;
+  ntrip.connect(ntripOpts());
+  save();
+}
+
+function onNtripStatus(s) {
+  const msg = $('ntripMsg');
+  const el = $('nState');
+  $('btnNtrip').textContent = ntrip.wanted ? 'Stop corrections' : 'Connect corrections';
+  $('btnNtrip').classList.toggle('on', ntrip.wanted);
+  if (s.state === 'on') { el.textContent = `streaming ${s.mount}`; el.className = 'stat-v good'; flash(msg, 'ok', `Corrections streaming from ${s.mount}.`); }
+  else if (s.state === 'connecting') { el.textContent = 'connecting'; el.className = 'stat-v warn'; }
+  else if (s.state === 'retrying') {
+    el.textContent = 'retrying'; el.className = 'stat-v warn';
+    flash(msg, 'warn', `${s.detail} Retrying in ${Math.round(s.inMs / 1000)}s.`);
+  } else { el.textContent = 'off'; el.className = 'stat-v'; }
+  renderNtripStats();
+}
+
+let ntripStatsTimer = null;
+function scheduleNtripStats() {
+  if (ntripStatsTimer) return;
+  ntripStatsTimer = setTimeout(() => { ntripStatsTimer = null; renderNtripStats(); }, 500);
+}
+
+function renderNtripStats() {
+  const s = ntrip.stats();
+  $('nBytes').textContent = s.bytes ? formatBytes(s.bytes) : '—';
+  const age = s.ageMs == null ? null : s.ageMs / 1000;
+  $('nAge').textContent = age == null ? '—' : `${age.toFixed(0)} s ago`;
+  $('nAge').className = 'stat-v' + (age == null ? '' : age < 5 ? ' good' : age < 30 ? ' warn' : ' bad');
+  $('nTypes').textContent = s.types.length ? s.types.map(([t, n]) => `${t}×${n}`).join('  ') : '—';
+}
+
+function readNtripInputs() {
+  state.ntrip = {
+    host: $('ntHost').value.trim(),
+    port: Number($('ntPort').value) || 2101,
+    mount: $('ntMount').value.trim(),
+    user: $('ntUser').value,
+    pass: $('ntPass').value,
+    tls: $('ntTls').checked,
+    remember: $('ntRemember').checked
+  };
+}
+
+function renderRoverStats() {
+  const f = lastRoverFix;
+  const wrap = $('roverStats');
+  if (!wrap || wrap.hidden) return;
+  const q = f && f.valid ? f : null;
+  const set = (id, text, cls = '') => { const el = $(id); el.textContent = text; el.className = 'stat-v' + (cls ? ' ' + cls : ''); };
+
+  const label = f ? (f.qualityLabel || f.meta?.label || 'NO FIX') : (rover.connected ? 'waiting…' : '—');
+  set('sQuality', label, !f || !f.valid ? 'bad' : f.meta.rank >= 5 ? 'good' : f.meta.rank >= 4 ? 'warn' : '');
+  set('sSigmaH', q?.sigmaH != null ? fmtAcc(q.sigmaH) : '—', q?.sigmaH != null && q.sigmaH < 0.05 ? 'good' : '');
+  set('sSigmaV', q?.sigmaV != null ? fmtAcc(q.sigmaV) : '—');
+  set('sSats', q?.sats != null ? String(q.sats) : '—');
+  set('sDop', q ? `${q.pdop != null ? q.pdop.toFixed(1) : '—'} / ${q.hdop != null ? q.hdop.toFixed(1) : '—'}` : '—');
+  const age = q?.ageOfDiff;
+  set('sAge', age != null ? `${age.toFixed(1)} s` : '—', age == null ? '' : age < 5 ? 'good' : age < 30 ? 'warn' : 'bad');
+  set('sBase', q?.baseId || '—');
+  set('sBytes', rover.bytesIn ? `${formatBytes(rover.bytesIn)} in · ${formatBytes(rover.bytesOut)} out` : '—');
+  set('sEllip', q?.ellipsoidAlt != null ? `${q.ellipsoidAlt.toFixed(3)} m` : '—');
+}
+
+const formatBytes = b =>
+  b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : b > 1500 ? `${(b / 1e3).toFixed(1)} kB` : `${b} B`;
 
 /* ─────────────────────────── demo walk ─────────────────────────── */
 
@@ -272,7 +578,8 @@ function setDemo(on) {
     const nx = Math.cos(th - Math.PI / 2), ny = Math.sin(th - Math.PI / 2);
     lastFix = {
       x: p.x + nx * wobble, y: p.y + ny * wobble,
-      acc: 2.5, heading: p.bearing, speed: 1.4, ele: null, t: performance.now(),
+      acc: 2.5, heading: p.bearing, speed: 1.4, ele: null, t: Date.now(),
+      q: { source: 'demo', label: 'DEMO', rank: 1 },
       ...(state.frame ? state.frame.toLL(p.x + nx * wobble, p.y + ny * wobble) : {}),
       demo: true
     };
@@ -285,10 +592,30 @@ function setDemo(on) {
 
 function renderAll() { renderReadout(); renderTiles(); renderTarget(); view.draw(); }
 
+function renderBadge() {
+  const el = $('fixBadge');
+  const q = lastFix?.q;
+  if (!lastFix || !q) { el.textContent = tracking() ? 'ACQUIRING' : 'GPS OFF'; el.className = 'fixbadge'; return; }
+  el.textContent = q.label;
+  el.className = 'fixbadge ' + (q.rank >= 5 ? 'rtk' : q.rank === 4 ? 'float' : q.rank >= 1 ? 'single' : 'none');
+}
+
+function renderElevation() {
+  const el = $('elBig');
+  const u = unitLabel();
+  const ele = lastFix?.ele;
+  if (ele == null || !isFinite(ele)) { el.textContent = ''; return; }
+  const v = u === 'ft' ? ele / M_PER_INTL_FT : ele;
+  const rod = Number(state.antenna) || 0;
+  el.textContent = `EL ${v.toFixed(state.decimals)} ${u}` + (rod ? ` · rod ${rod} ${u}` : '');
+}
+
 function renderReadout() {
   const al = state.alignment;
   const staEl = $('staBig'), offEl = $('offBig'), warn = $('staWarn');
   const readout = $('readout');
+  renderBadge();
+  renderElevation();
 
   if (!al) {
     readout.classList.add('off');
@@ -300,7 +627,7 @@ function renderReadout() {
   if (!lastFix || lastFix.x == null) {
     readout.classList.add('off');
     staEl.textContent = '—';
-    offEl.textContent = watchId != null ? 'waiting for a fix…' : 'start GPS or turn on the demo walk';
+    offEl.textContent = tracking() ? 'waiting for a fix…' : 'start GPS or turn on the demo walk';
     view.snap = null;
     return;
   }
@@ -319,7 +646,10 @@ function renderReadout() {
       ? `${fmt(Math.abs(p.beyond), 1)} ${unitLabel()} before the start of the line`
       : `${fmt(p.beyond, 1)} ${unitLabel()} past the end of the line`);
   }
-  if (lastFix.acc > 20 && !lastFix.demo) msgs.push(`GPS is ±${fmt(lastFix.acc, 0)} m — treat the station as approximate`);
+  if (lastFix.acc > 20 && !lastFix.demo) msgs.push(`Position is ±${fmt(lastFix.acc, 0)} m — treat the station as approximate`);
+  if (lastFix.q?.source === 'rover' && lastFix.q.rank < 4) {
+    msgs.push('Not an RTK solution — corrections are not reaching the receiver');
+  }
   if (lastFix.demo) msgs.push('Demo walk — this is a simulated position, not your GPS');
   warn.hidden = !msgs.length;
   warn.textContent = msgs.join(' · ');
@@ -330,15 +660,16 @@ function renderTiles() {
   const u = unitLabel();
   const p = state.lastProjection;
   const fix = lastFix;
-  $('tAcc').textContent = fix?.acc != null ? `±${fmt(fix.acc, 1)} m` : '—';
-  $('tSpeed').textContent = fix?.speed != null && isFinite(fix.speed)
-    ? `${fmt(fix.speed * 2.23694, 1)} mph` : '—';
-  $('tHead').textContent = fix?.heading != null && isFinite(fix.heading) ? `${fmt(fix.heading, 0)}°` : '—';
+  const q = fix?.q;
+  $('tAcc').textContent = fix?.acc != null ? `±${fmtAcc(fix.acc)}` : '—';
+  $('tSats').textContent = q?.sats != null ? String(q.sats) : '—';
+  const age = q?.ageOfDiff;
+  $('tAge').textContent = age != null ? `${fmt(age, 1)} s` : (q?.source === 'rover' ? 'none' : '—');
   $('tAlign').textContent = p ? quadrantBearing(p.bearing, { seconds: false }) : '—';
   $('tToEnd').textContent = (p && state.alignment)
     ? `${fmt((state.alignment.length - p.dist) * state.alignment.unitsPerMetre, 1)} ${u}` : '—';
-  $('tElev').textContent = fix?.ele != null && isFinite(fix.ele)
-    ? `${fmt(u === 'ft' ? fix.ele / M_PER_INTL_FT : fix.ele, 1)} ${u}` : '—';
+  $('tSpeed').textContent = fix?.speed != null && isFinite(fix.speed)
+    ? `${fmt(fix.speed * 2.23694, 1)} mph` : '—';
 }
 
 function renderTarget() {
@@ -377,6 +708,7 @@ function addMark() {
     return;
   }
   const note = $('markNote').value.trim();
+  const q = lastFix.q || {};
   state.marks.push({
     t: Date.now(),
     station: p.station,
@@ -388,7 +720,18 @@ function addMark() {
     ele: lastFix.ele ?? null,
     demo: !!lastFix.demo,
     note,
-    x: lastFix.x, y: lastFix.y
+    x: lastFix.x, y: lastFix.y,
+    // The quality of the fix is part of the record — a staking note without it
+    // cannot be checked later.
+    fix: q.label || null,
+    source: q.source || null,
+    sats: q.sats ?? null,
+    hdop: q.hdop ?? null,
+    sigmaH: q.sigmaH ?? null,
+    sigmaV: q.sigmaV ?? null,
+    ageOfDiff: q.ageOfDiff ?? null,
+    antenna: q.antenna ?? null,
+    ellipsoidAlt: q.ellipsoidAlt ?? null
   });
   $('markNote').value = '';
   renderLog();
@@ -431,8 +774,10 @@ function renderLog() {
     sub.className = 'logrow-sub';
     sub.textContent = [
       new Date(m.t).toLocaleString(),
-      m.lat != null ? `${m.lat.toFixed(6)}, ${m.lon.toFixed(6)}` : null,
-      m.acc != null ? `±${fmt(m.acc, 1)} m` : null,
+      m.fix || null,
+      m.lat != null ? `${m.lat.toFixed(7)}, ${m.lon.toFixed(7)}` : null,
+      m.acc != null ? `±${fmtAcc(m.acc)}` : null,
+      m.ele != null ? `EL ${fmt(m.unit === 'ft' ? m.ele / M_PER_INTL_FT : m.ele, 2)} ${m.unit}` : null,
       m.demo ? 'DEMO' : null
     ].filter(Boolean).join(' · ');
     main.append(sta, sub);
@@ -464,16 +809,26 @@ function download(name, text, type) {
 
 function exportCsv() {
   if (!state.marks.length) return;
-  const head = ['n', 'station', 'station_value', 'offset', 'unit', 'latitude', 'longitude', 'accuracy_m', 'elevation_m', 'timestamp', 'note', 'simulated'];
+  const head = ['n', 'station', 'station_value', 'offset', 'unit', 'latitude', 'longitude',
+    'elevation_m', 'ellipsoid_h_m', 'antenna_m', 'fix', 'sats', 'hdop', 'sigma_h_m', 'sigma_v_m',
+    'corr_age_s', 'accuracy_m', 'timestamp', 'note', 'simulated'];
   const rows = state.marks.map((m, i) => [
     i + 1,
     formatStation(m.station, state.interval, state.decimals),
     m.station.toFixed(3),
     m.offset.toFixed(3),
     m.unit,
-    m.lat ?? '', m.lon ?? '',
-    m.acc != null ? m.acc.toFixed(1) : '',
-    m.ele != null ? m.ele.toFixed(2) : '',
+    m.lat != null ? m.lat.toFixed(9) : '', m.lon != null ? m.lon.toFixed(9) : '',
+    m.ele != null ? m.ele.toFixed(3) : '',
+    m.ellipsoidAlt != null ? m.ellipsoidAlt.toFixed(3) : '',
+    m.antenna != null ? m.antenna.toFixed(3) : '',
+    m.fix || '',
+    m.sats ?? '',
+    m.hdop != null ? m.hdop.toFixed(2) : '',
+    m.sigmaH != null ? m.sigmaH.toFixed(3) : '',
+    m.sigmaV != null ? m.sigmaV.toFixed(3) : '',
+    m.ageOfDiff != null ? m.ageOfDiff.toFixed(1) : '',
+    m.acc != null ? m.acc.toFixed(3) : '',
     new Date(m.t).toISOString(),
     (m.note || '').replace(/"/g, '""'),
     m.demo ? 'yes' : 'no'
@@ -491,6 +846,11 @@ function exportGeoJson() {
       station: formatStation(m.station, state.interval, state.decimals),
       offset: Number(m.offset.toFixed(3)),
       unit: m.unit,
+      elevation_m: m.ele != null ? Number(m.ele.toFixed(3)) : null,
+      fix: m.fix || null,
+      sats: m.sats ?? null,
+      sigma_h_m: m.sigmaH ?? null,
+      corr_age_s: m.ageOfDiff ?? null,
       accuracy_m: m.acc,
       time: new Date(m.t).toISOString(),
       note: m.note || ''
@@ -708,6 +1068,16 @@ function syncSettingsInputs() {
   $('inpStaStart').value = formatStation(state.staStart, state.interval, 2);
   $('chkSmooth').checked = state.smooth;
   $('chkDemo').checked = state.demo;
+  $('selBaud').value = String(state.baud);
+  $('inpAntenna').value = state.antenna ? String(state.antenna) : '';
+  const n = state.ntrip;
+  $('ntHost').value = n.host || '';
+  $('ntPort').value = String(n.port || 2101);
+  $('ntMount').value = n.mount || '';
+  $('ntUser').value = n.user || '';
+  $('ntPass').value = n.pass || '';
+  $('ntTls').checked = !!n.tls;
+  $('ntRemember').checked = !!n.remember;
 }
 
 /* ─────────────────────────── persistence ─────────────────────────── */
@@ -719,6 +1089,9 @@ function save() {
 }
 
 function doSave() {
+  // Receiver and caster settings outlive any one alignment, so they are stored
+  // even when no project is loaded. The caster password only if asked for.
+  saveSettings();
   if (!state.file) { localStorage.removeItem(STORE_KEY); return; }
   const payload = {
     v: 1,
@@ -742,6 +1115,34 @@ function doSave() {
   } catch (e) {
     $('saveMsg').textContent = 'Too large to save on this device — the project will need reloading from the file next time.';
   }
+}
+
+function saveSettings() {
+  const n = state.ntrip;
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      source: state.source, baud: state.baud, antenna: state.antenna, smooth: state.smooth,
+      ntrip: {
+        host: n.host, port: n.port, mount: n.mount, user: n.user, tls: n.tls,
+        remember: n.remember,
+        pass: n.remember ? n.pass : ''
+      }
+    }));
+  } catch { /* private mode; settings just will not persist */ }
+}
+
+function restoreSettings() {
+  let raw;
+  try { raw = localStorage.getItem(SETTINGS_KEY); } catch { return; }
+  if (!raw) return;
+  try {
+    const s = JSON.parse(raw);
+    state.baud = s.baud || state.baud;
+    state.antenna = s.antenna || 0;
+    if (typeof s.smooth === 'boolean') state.smooth = s.smooth;
+    state.ntrip = { ...state.ntrip, ...(s.ntrip || {}) };
+    setSource(s.source === 'rover' ? 'rover' : 'phone');
+  } catch { /* ignore a corrupt blob rather than blocking startup */ }
 }
 
 function restore() {
@@ -792,17 +1193,41 @@ function resetProject() {
 
 /* ─────────────────────────── wiring ─────────────────────────── */
 
-function bind() {
-  // tabs
-  document.querySelectorAll('.tab').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.tab').forEach(b => { b.classList.remove('is-on'); b.setAttribute('aria-selected', 'false'); });
-      btn.classList.add('is-on'); btn.setAttribute('aria-selected', 'true');
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('is-on'));
-      $('tab-' + btn.dataset.tab).classList.add('is-on');
-      if (btn.dataset.tab === 'track') requestAnimationFrame(() => view.draw());
-    };
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-selected', String(on));
   });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('is-on'));
+  $('tab-' + name).classList.add('is-on');
+  if (name === 'track') requestAnimationFrame(() => view.draw());
+  if (name === 'rover') renderRoverStats();
+}
+
+function bind() {
+  document.querySelectorAll('.tab').forEach(btn => { btn.onclick = () => showTab(btn.dataset.tab); });
+
+  // position source + receiver
+  document.querySelectorAll('#srcSeg .seg-btn').forEach(b => { b.onclick = () => setSource(b.dataset.source); });
+  $('btnUsb').onclick = () => connectRover('usb');
+  $('btnBle').onclick = () => connectRover('ble');
+  $('btnSerial').onclick = () => connectRover('serial');
+  $('btnDisconnect').onclick = disconnectRover;
+  $('selBaud').onchange = e => { state.baud = Number(e.target.value); save(); };
+  $('inpAntenna').onchange = e => {
+    state.antenna = Number(e.target.value) || 0;
+    renderElevation(); save();
+  };
+
+  // corrections
+  $('btnMounts').onclick = fetchMountpoints;
+  $('btnNtrip').onclick = toggleNtrip;
+  ['ntHost', 'ntPort', 'ntMount', 'ntUser', 'ntPass'].forEach(id => {
+    $(id).onchange = () => { readNtripInputs(); save(); };
+  });
+  $('ntTls').onchange = () => { readNtripInputs(); save(); };
+  $('ntRemember').onchange = () => { readNtripInputs(); save(); };
 
   // file
   $('fileInput').onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
@@ -836,9 +1261,11 @@ function bind() {
   };
 
   // georeference
-  document.querySelectorAll('.seg-btn').forEach(b => {
+  // Scoped to the georeference block — the position-source picker uses the
+  // same class and must keep its own handler.
+  document.querySelectorAll('#georefBlock .seg-btn').forEach(b => {
     b.onclick = () => {
-      document.querySelectorAll('.seg-btn').forEach(x => x.classList.remove('is-on'));
+      document.querySelectorAll('#georefBlock .seg-btn').forEach(x => x.classList.remove('is-on'));
       b.classList.add('is-on');
       ctrlSrcMode = b.dataset.src;
       $('srcSta').hidden = ctrlSrcMode !== 'sta';
@@ -849,8 +1276,12 @@ function bind() {
   $('btnAddCtrl').onclick = addControlPoint;
 
   // track
-  $('btnGps').onclick = () => (watchId == null ? startGps() : stopGps());
-  $('gpsPill').onclick = () => (watchId == null ? startGps() : stopGps());
+  const toggleTracking = () => {
+    if (state.source === 'rover') { rover.connected ? disconnectRover() : showTab('rover'); return; }
+    watchId == null ? startGps() : stopGps();
+  };
+  $('btnGps').onclick = toggleTracking;
+  $('gpsPill').onclick = toggleTracking;
   $('btnMark').onclick = addMark;
   $('markNote').onkeydown = e => { if (e.key === 'Enter') addMark(); };
   $('chkSmooth').onchange = e => { state.smooth = e.target.checked; smoothed = null; save(); };
@@ -889,6 +1320,7 @@ function bind() {
 
 view = new PlanView($('map'));
 bind();
+restoreSettings();
 
 // Keep the sticky readout parked directly under the header, whatever height
 // the notch and the project name conspire to make it.
@@ -901,6 +1333,18 @@ syncSettingsInputs();
 if (!restore()) { renderProjectTab(); renderLog(); }
 $('btnFollow').classList.toggle('is-on', view.follow);
 renderAll();
+
+// With ?debug in the URL the app will take NMEA from somewhere other than a
+// receiver — used by the test suite, and useful for support when a crew can
+// send a log but not the hardware.
+if (new URLSearchParams(location.search).has('debug')) {
+  window.stationDebug = {
+    feedNmea: text => nmea.push(text),
+    state,
+    get fix() { return lastFix; },
+    get roverFix() { return lastRoverFix; }
+  };
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));

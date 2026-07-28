@@ -2,6 +2,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const ntrip = require('./ntrip-relay');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 3000;
@@ -26,6 +27,9 @@ const TYPES = {
 };
 
 http.createServer((req, res) => {
+  // The station app's NTRIP bridge lives under /ntrip/ — corrections, not files.
+  if (ntrip.handle(req, res)) return;
+
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);

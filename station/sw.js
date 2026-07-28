@@ -1,5 +1,5 @@
 // Offline shell. Job sites lose signal; the app must not.
-const CACHE = 'station-v1';
+const CACHE = 'station-v2';
 const SHELL = [
   './',
   'index.html',
@@ -12,7 +12,10 @@ const SHELL = [
   'js/parse.js',
   'js/landxml.js',
   'js/dxf.js',
-  'js/map.js'
+  'js/map.js',
+  'js/nmea.js',
+  'js/rover.js',
+  'js/ntrip.js'
 ];
 
 self.addEventListener('install', e => {

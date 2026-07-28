@@ -3,8 +3,10 @@
 Static one-pager. No build step, no framework, no dependencies.
 
 Also hosts **[Station](station/)** (`/station/`) — a GPS stationing app for field
-crews. Separate app, same server, no dependencies either. See
-[`station/README.md`](station/README.md).
+crews, with an NTRIP relay for RTK corrections mounted at `/ntrip/`. Separate
+app, same server, no dependencies either. See
+[`station/README.md`](station/README.md) for the relay's environment variables
+and how it is fenced.
 
 ## Deploy to Railway
 
