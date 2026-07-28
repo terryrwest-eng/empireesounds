@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Station — GPS stationing for field crews</title>
+<meta name="description" content="Load an alignment — LandXML, DXF, KML, GPX, GeoJSON or a point file — and see the station and offset you're standing on. Works offline in the browser.">
+<meta name="theme-color" content="#14100E">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Station">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="topbar" id="topbar">
+  <header class="bar">
+    <div class="brand">
+      <span class="brand-mark">STA</span>
+      <span class="brand-name" id="projectName">No alignment loaded</span>
+    </div>
+    <button class="pill" id="gpsPill" type="button" aria-live="polite">GPS off</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" class="tab is-on" data-tab="track" aria-selected="true">Track</button>
+    <button role="tab" class="tab" data-tab="log" aria-selected="false">Log <span class="count" id="logCount">0</span></button>
+    <button role="tab" class="tab" data-tab="project" aria-selected="false">Project</button>
+  </nav>
+</div>
+
+<main>
+
+<!-- ─────────────── TRACK ─────────────── -->
+<section id="tab-track" class="panel is-on">
+
+  <!-- sticky: the number you came for should never scroll away -->
+  <div class="readout-wrap">
+    <div class="readout" id="readout">
+      <div class="readout-label">STATION</div>
+      <div class="readout-sta" id="staBig">—</div>
+      <div class="readout-off" id="offBig">load an alignment to begin</div>
+      <div class="readout-warn" id="staWarn" hidden></div>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><span class="tile-k">Accuracy</span><span class="tile-v" id="tAcc">—</span></div>
+    <div class="tile"><span class="tile-k">Speed</span><span class="tile-v" id="tSpeed">—</span></div>
+    <div class="tile"><span class="tile-k">Your heading</span><span class="tile-v" id="tHead">—</span></div>
+    <div class="tile"><span class="tile-k">℄ bearing</span><span class="tile-v" id="tAlign">—</span></div>
+    <div class="tile"><span class="tile-k">To end</span><span class="tile-v" id="tToEnd">—</span></div>
+    <div class="tile"><span class="tile-k">Elevation</span><span class="tile-v" id="tElev">—</span></div>
+  </div>
+
+  <div class="mapwrap">
+    <canvas id="map"></canvas>
+    <div class="mapbtns">
+      <button type="button" id="btnFollow" class="mini">Follow</button>
+      <button type="button" id="btnFit" class="mini">Fit</button>
+      <button type="button" id="btnZoomIn" class="mini" aria-label="Zoom in">+</button>
+      <button type="button" id="btnZoomOut" class="mini" aria-label="Zoom out">−</button>
+    </div>
+  </div>
+
+  <div class="goto">
+    <label for="targetSta">Go to station</label>
+    <div class="goto-row">
+      <input id="targetSta" type="text" inputmode="decimal" placeholder="12+50" autocomplete="off">
+      <button type="button" class="btn ghost" id="btnClearTarget">Clear</button>
+    </div>
+    <div class="goto-out" id="targetOut">—</div>
+  </div>
+
+  <div class="actions">
+    <button type="button" class="btn primary" id="btnGps">Start GPS</button>
+    <button type="button" class="btn" id="btnMark">Mark this station</button>
+    <input id="markNote" type="text" placeholder="note (optional)" autocomplete="off">
+    <label class="check"><input type="checkbox" id="chkSmooth" checked> Smooth GPS</label>
+    <label class="check"><input type="checkbox" id="chkDemo"> Demo walk</label>
+  </div>
+
+</section>
+
+<!-- ─────────────── LOG ─────────────── -->
+<section id="tab-log" class="panel">
+  <div class="row-between">
+    <h2>Marks</h2>
+    <div class="row-gap">
+      <button type="button" class="btn ghost" id="btnExportCsv">CSV</button>
+      <button type="button" class="btn ghost" id="btnExportGeo">GeoJSON</button>
+      <button type="button" class="btn ghost danger" id="btnClearLog">Clear</button>
+    </div>
+  </div>
+  <div id="logList" class="loglist"><p class="muted">Nothing marked yet. Hit <b>Mark this station</b> on the Track tab.</p></div>
+</section>
+
+<!-- ─────────────── PROJECT ─────────────── -->
+<section id="tab-project" class="panel">
+
+  <h2>1 · Alignment file</h2>
+  <label class="drop" id="drop">
+    <input type="file" id="fileInput" accept=".xml,.landxml,.dxf,.kml,.kmz,.gpx,.geojson,.json,.csv,.txt,.pnt">
+    <b>Choose a file</b> or drag one here
+    <small>LandXML · DXF · KML / KMZ · GPX · GeoJSON · CSV or PNEZD point file</small>
+  </label>
+  <div id="fileMsg" class="msg" hidden></div>
+
+  <div id="linePick" hidden>
+    <h3>Which line is the centreline?</h3>
+    <div id="lineList" class="linelist"></div>
+  </div>
+
+  <div id="setupBlock" hidden>
+    <h2>2 · Stationing</h2>
+    <div class="grid2">
+      <label>Units
+        <select id="selUnit">
+          <option value="ft">Feet</option>
+          <option value="m">Metres</option>
+        </select>
+      </label>
+      <label>Station interval
+        <select id="selInterval">
+          <option value="100">100 (12+50)</option>
+          <option value="1000">1000 (1+250)</option>
+        </select>
+      </label>
+      <label>Start station
+        <input id="inpStaStart" type="text" inputmode="decimal" placeholder="10+00" autocomplete="off">
+      </label>
+      <label>Decimals
+        <select id="selDecimals">
+          <option value="2" selected>0.01</option>
+          <option value="1">0.1</option>
+          <option value="0">1</option>
+        </select>
+      </label>
+    </div>
+    <p class="muted" id="alignSummary"></p>
+
+    <details id="eqBlock">
+      <summary>Station equations <span class="count" id="eqCount">0</span></summary>
+      <div id="eqList" class="eqlist"></div>
+      <div class="grid2">
+        <label>At distance from start<input id="eqDist" type="text" inputmode="decimal" placeholder="1500"></label>
+        <label>Station ahead<input id="eqAhead" type="text" inputmode="decimal" placeholder="20+00"></label>
+      </div>
+      <button type="button" class="btn ghost" id="btnAddEq">Add equation</button>
+    </details>
+  </div>
+
+  <div id="georefBlock" hidden>
+    <h2>3 · Georeference</h2>
+    <p class="muted">
+      This file is in project grid coordinates, so it has no idea where on Earth it is.
+      Tie it down with two known points — stand on a stake and capture, or type a
+      latitude and longitude you trust. Two points fix rotation and scale; one point
+      assumes grid north is true north, which is rarely exactly true.
+    </p>
+
+    <div id="ctrlList" class="ctrllist"></div>
+
+    <div class="ctrl-add">
+      <div class="seg">
+        <button type="button" class="seg-btn is-on" data-src="sta">By station / offset</button>
+        <button type="button" class="seg-btn" data-src="grid">By northing / easting</button>
+      </div>
+
+      <div class="grid2" id="srcSta">
+        <label>Station<input id="cpSta" type="text" inputmode="decimal" placeholder="12+50"></label>
+        <label>Offset (+RT / −LT)<input id="cpOff" type="text" inputmode="decimal" placeholder="0"></label>
+      </div>
+      <div class="grid2" id="srcGrid" hidden>
+        <label>Northing<input id="cpN" type="text" inputmode="decimal"></label>
+        <label>Easting<input id="cpE" type="text" inputmode="decimal"></label>
+      </div>
+
+      <div class="grid2">
+        <label>Latitude<input id="cpLat" type="text" inputmode="decimal" placeholder="33.812345"></label>
+        <label>Longitude<input id="cpLon" type="text" inputmode="decimal" placeholder="-117.228456"></label>
+      </div>
+
+      <div class="row-gap">
+        <button type="button" class="btn ghost" id="btnCapture">Use my GPS position</button>
+        <button type="button" class="btn" id="btnAddCtrl">Add control point</button>
+      </div>
+      <div class="msg" id="ctrlMsg" hidden></div>
+    </div>
+
+    <div class="fitout" id="fitOut"></div>
+  </div>
+
+  <div id="dangerBlock" hidden>
+    <h2>Project</h2>
+    <div class="row-gap">
+      <button type="button" class="btn ghost" id="btnSave">Save now</button>
+      <button type="button" class="btn ghost danger" id="btnReset">Clear project</button>
+    </div>
+    <p class="muted" id="saveMsg"></p>
+  </div>
+
+  <h2>Notes</h2>
+  <ul class="muted notes">
+    <li>Everything runs on the device. No file leaves the phone and nothing is uploaded.</li>
+    <li>Stationing is measured along the centreline as drawn. Curves and spirals from LandXML and DXF are rebuilt to a 1&nbsp;mm chord tolerance.</li>
+    <li>Offsets are signed the way plans call them: <b>+ right</b>, <b>− left</b>, looking up-station.</li>
+    <li>Phone GPS is a few metres at best. Good enough to know the station you are standing at, not a substitute for a rover.</li>
+  </ul>
+
+</section>
+
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

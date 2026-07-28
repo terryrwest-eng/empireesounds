@@ -2,6 +2,10 @@
 
 Static one-pager. No build step, no framework, no dependencies.
 
+Also hosts **[Station](station/)** (`/station/`) — a GPS stationing app for field
+crews. Separate app, same server, no dependencies either. See
+[`station/README.md`](station/README.md).
+
 ## Deploy to Railway
 
 1. Push this folder to a GitHub repo.
