@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Station</string>
+    <string name="channel_name">Receiver link</string>
+    <string name="channel_description">Keeps the GNSS link and corrections running while the screen is off</string>
+    <string name="notice_title">Station is tracking</string>
+</resources>

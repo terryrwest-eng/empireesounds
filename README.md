@@ -8,6 +8,10 @@ app, same server, no dependencies either. See
 [`station/README.md`](station/README.md) for the relay's environment variables
 and how it is fenced.
 
+**[Station for Android](android/)** is the same app as a native APK — classic
+Bluetooth, direct-to-caster NTRIP, and it keeps running with the screen off. It
+bundles the web app rather than duplicating it.
+
 ## Deploy to Railway
 
 1. Push this folder to a GitHub repo.

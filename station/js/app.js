@@ -4,9 +4,10 @@ import { LocalFrame, fitSimilarity, applySimilarity, azimuth, quadrantBearing, M
 import { Alignment, formatStation, parseStation, formatOffset, simplify, polylineLength } from './alignment.js';
 import { parseFile } from './parse.js';
 import { PlanView } from './map.js';
-import { RoverLink, support } from './rover.js';
+import { RoverLink, support as webSupport } from './rover.js';
 import { NmeaReader, buildGGA } from './nmea.js';
 import { NtripClient, casterDistanceKm } from './ntrip.js';
+import { isNative, NativeLink, NativeNtrip, nativeInfo } from './native.js';
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = 'station.project.v1';
@@ -293,18 +294,35 @@ document.addEventListener('visibilitychange', () => {
 
 let lastRoverFix = null;   // the raw NMEA fix, kept for the GGA the caster wants
 
-const rover = new RoverLink({
-  onData: chunk => nmea.push(chunk),
-  onStatus: s => onRoverStatus(s)
-});
+// Inside the Android app the shell owns the hardware and the caster socket; in a
+// browser it is WebUSB/BLE and the server relay. Both present the same interface,
+// so nothing below this line knows the difference.
+const support = isNative
+  ? { usb: true, spp: true, ble: true, serial: false, native: true }
+  : { ...webSupport, spp: false, native: false };
+
+const rover = isNative
+  ? new NativeLink({
+      onData: chunk => nmea.push(chunk),
+      onStatus: s => onRoverStatus(s),
+      onDevices: (kind, devices) => renderDeviceList(kind, devices)
+    })
+  : new RoverLink({
+      onData: chunk => nmea.push(chunk),
+      onStatus: s => onRoverStatus(s)
+    });
 
 const nmea = new NmeaReader(fix => onRoverFix(fix));
 
-const ntrip = new NtripClient({
-  onRtcm: bytes => { if (rover.connected) rover.write(bytes); },
-  onStatus: s => onNtripStatus(s),
-  onStats: () => scheduleNtripStats()
-});
+const ntrip = isNative
+  ? new NativeNtrip({ onStatus: s => onNtripStatus(s), onStats: () => scheduleNtripStats() })
+  : new NtripClient({
+      // In the browser the corrections come back through the page, so they have
+      // to be handed to the receiver here.
+      onRtcm: bytes => { if (rover.connected) rover.write(bytes); },
+      onStatus: s => onNtripStatus(s),
+      onStats: () => scheduleNtripStats()
+    });
 
 function onRoverFix(fix) {
   lastRoverFix = fix;
@@ -341,7 +359,7 @@ function antennaMetres() {
 function onRoverStatus(s) {
   const msg = $('roverMsg');
   if (s.state === 'connected') {
-    flash(msg, 'ok', `Connected to ${s.detail}. Waiting for NMEA…`);
+    flash(msg, 'ok', `Connected to ${s.detail || s.name}. Waiting for NMEA…`);
     $('btnDisconnect').hidden = false;
     $('roverStats').hidden = false;
     setTracking(true);
@@ -359,16 +377,71 @@ function onRoverStatus(s) {
   renderRoverStats();
 }
 
-async function connectRover(kind) {
+async function connectRover(kind, deviceId) {
   const msg = $('roverMsg');
   try {
     if (state.source !== 'rover') setSource('rover');
-    await rover.connect(kind, { baudRate: Number(state.baud) });
+
+    // The browser shows its own device chooser. The native app does not, so the
+    // choice happens here — and skipping it when there is only one device is
+    // the difference between two taps and four in the field.
+    if (isNative && deviceId === undefined) {
+      const devices = rover.devices(kind);
+      if (kind === 'ble' && devices.length === 0) {
+        flash(msg, '', 'Scanning for BLE receivers…');
+        renderDeviceList(kind, []);
+        return;
+      }
+      if (devices.length === 0) {
+        flash(msg, 'err', kind === 'usb'
+          ? 'No USB receiver found. Check the OTG cable, and that the receiver is powered.'
+          : 'No paired Bluetooth devices. Pair the receiver in Android settings first.');
+        return;
+      }
+      if (devices.length > 1) { renderDeviceList(kind, devices); return; }
+      deviceId = devices[0].id;
+    }
+
+    flash(msg, '', 'Connecting…');
+    await rover.connect(kind, { baudRate: Number(state.baud), id: deviceId });
   } catch (err) {
     // A cancelled chooser is not an error worth shouting about.
     if (/cancel|no device selected|user gesture/i.test(err.message || '')) { flash(msg, '', 'No device chosen.'); return; }
     flash(msg, 'err', err.message || String(err));
   }
+}
+
+function renderDeviceList(kind, devices) {
+  const wrap = $('deviceList');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!devices.length) {
+    wrap.hidden = false;
+    wrap.innerHTML = '<p class="muted">Looking…</p>';
+    return;
+  }
+  wrap.hidden = false;
+  const title = document.createElement('div');
+  title.className = 'linerow-sub';
+  title.textContent = `Pick a ${kind === 'usb' ? 'USB' : 'Bluetooth'} device`;
+  wrap.append(title);
+  devices.forEach(d => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'linerow';
+    const main = document.createElement('div');
+    main.className = 'linerow-main';
+    const nm = document.createElement('div');
+    nm.className = 'linerow-name';
+    nm.textContent = d.name;
+    const sub = document.createElement('div');
+    sub.className = 'linerow-sub';
+    sub.textContent = d.detail || d.id;
+    main.append(nm, sub);
+    row.append(main);
+    row.onclick = () => { wrap.hidden = true; connectRover(kind, d.id); };
+    wrap.append(row);
+  });
 }
 
 async function disconnectRover() {
@@ -398,15 +471,24 @@ function setSource(source) {
   if (source === 'rover') {
     if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
     setTracking(rover.connected);
-    const missing = [];
-    if (!support.usb) missing.push('USB');
-    if (!support.ble) missing.push('Bluetooth');
-    if (!support.serial) missing.push('serial ports');
-    $('sourceNote').textContent = missing.length === 3
-      ? 'This browser cannot reach an external receiver at all. On iOS that is a platform limit, not a setting — Safari and every iOS browser lack WebUSB and Web Bluetooth.'
-      : missing.length
-        ? `This browser supports ${['USB', 'Bluetooth', 'serial ports'].filter(x => !missing.includes(x)).join(' and ')}. Not available here: ${missing.join(', ')}.`
-        : 'USB, Bluetooth and serial are all available in this browser.';
+    if (support.native) {
+      const info = nativeInfo() || {};
+      $('sourceNote').textContent =
+        `Android app${info.version ? ' ' + info.version : ''} — USB, paired Bluetooth (SPP) and BLE all work, ` +
+        'and corrections come straight from the caster with no relay in between.';
+    } else {
+      const missing = [];
+      if (!support.usb) missing.push('USB');
+      if (!support.ble) missing.push('Bluetooth');
+      if (!support.serial) missing.push('serial ports');
+      $('sourceNote').textContent = missing.length === 3
+        ? 'This browser cannot reach an external receiver at all. On iOS that is a platform limit, not a setting — Safari and every iOS browser lack WebUSB and Web Bluetooth. The Android app has no such limit.'
+        : missing.length
+          ? `This browser supports ${['USB', 'Bluetooth', 'serial ports'].filter(x => !missing.includes(x)).join(' and ')}. Not available here: ${missing.join(', ')}.`
+          : 'USB, Bluetooth and serial are all available in this browser.';
+    }
+    $('btnSpp').hidden = !support.spp;
+    $('btnSerial').hidden = !!support.native;
     ['btnUsb', 'btnBle', 'btnSerial'].forEach((id, i) => { $(id).disabled = ![support.usb, support.ble, support.serial][i]; });
   } else {
     $('sourceNote').textContent = 'The phone\'s own GPS. Metres, not centimetres — fine for finding a station, not for setting one.';
@@ -1211,6 +1293,7 @@ function bind() {
   // position source + receiver
   document.querySelectorAll('#srcSeg .seg-btn').forEach(b => { b.onclick = () => setSource(b.dataset.source); });
   $('btnUsb').onclick = () => connectRover('usb');
+  $('btnSpp').onclick = () => connectRover('spp');
   $('btnBle').onclick = () => connectRover('ble');
   $('btnSerial').onclick = () => connectRover('serial');
   $('btnDisconnect').onclick = disconnectRover;
@@ -1320,6 +1403,20 @@ function bind() {
 
 view = new PlanView($('map'));
 bind();
+
+// Inside the app, several of the browser's limits simply do not apply, and the
+// page should not keep apologising for them.
+if (isNative) {
+  $('ntripNote').textContent =
+    'The app connects straight to the caster and feeds the receiver directly — no relay, and it keeps ' +
+    'running with the screen off. Your password is sent to the caster and stored only if you ask for it.';
+  $('platformNotes').innerHTML =
+    '<li><b>USB</b> — an OTG cable to the receiver. Steadiest link, and it powers the board.</li>' +
+    '<li><b>Bluetooth (paired)</b> — classic SPP, the same module SurPad uses. Pair it in Android settings first.</li>' +
+    '<li><b>Bluetooth (BLE)</b> — for u-blox and HM-10 style serial modules.</li>' +
+    '<li>Corrections keep streaming with the screen off; a notification shows while the link is up.</li>';
+}
+
 restoreSettings();
 
 // Keep the sticky readout parked directly under the header, whatever height
@@ -1346,6 +1443,7 @@ if (new URLSearchParams(location.search).has('debug')) {
   };
 }
 
-if ('serviceWorker' in navigator) {
+// The APK already carries every file, so the offline worker is browser-only.
+if (!isNative && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }

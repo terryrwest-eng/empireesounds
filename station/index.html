@@ -105,10 +105,12 @@
     <h3>Connection</h3>
     <div class="row-gap">
       <button type="button" class="btn" id="btnUsb">USB cable</button>
+      <button type="button" class="btn" id="btnSpp" hidden>Bluetooth (paired)</button>
       <button type="button" class="btn" id="btnBle">Bluetooth (BLE)</button>
       <button type="button" class="btn" id="btnSerial">Serial port</button>
       <button type="button" class="btn ghost danger" id="btnDisconnect" hidden>Disconnect</button>
     </div>
+    <div id="deviceList" class="linelist" hidden></div>
     <div class="grid2">
       <label>Baud rate
         <select id="selBaud">
@@ -171,7 +173,7 @@
   </div>
 
   <h2>What works where</h2>
-  <ul class="muted notes">
+  <ul class="muted notes" id="platformNotes">
     <li><b>Android + Chrome</b> — USB (OTG cable) and BLE both work. USB is the steadier link.</li>
     <li><b>Desktop Chrome / Edge</b> — USB, BLE and a plain serial port.</li>
     <li><b>iPhone</b> — no browser on iOS can reach a USB or Bluetooth receiver. Phone GPS only, until this is wrapped as a native app.</li>

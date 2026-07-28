@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- u-blox (ZED-F9P native USB, as on an ArduSimple simpleRTK2B) -->
+    <usb-device vendor-id="5446" />
+    <!-- Silicon Labs CP210x -->
+    <usb-device vendor-id="4292" />
+    <!-- FTDI -->
+    <usb-device vendor-id="1027" />
+    <!-- WCH CH340/CH341 -->
+    <usb-device vendor-id="6790" />
+    <!-- Prolific PL2303 -->
+    <usb-device vendor-id="1659" />
+</resources>

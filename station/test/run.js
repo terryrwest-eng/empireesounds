@@ -396,6 +396,119 @@ const near = (name, got, want, tol) =>
   await page.click('.tab[data-tab="project"]');
   await page.screenshot({ path: path.join(__dirname, 'shot-project.png'), fullPage: true });
 
+  /* ---------------- native shell contract ---------------- */
+  console.log('\n— Android shell (mock bridge) —');
+  const nctx = await browser.newContext({
+    permissions: ['geolocation'],
+    geolocation: { latitude: 33.8, longitude: -117.195, accuracy: 4 },
+    viewport: { width: 430, height: 932 }
+  });
+  // Installed before any app module runs, exactly as the WebView injects it.
+  await nctx.addInitScript(() => {
+    const emit = o => window.AndroidStationEvent && window.AndroidStationEvent(JSON.stringify(o));
+    window.__mock = { written: [], ntrip: null, connects: [] };
+    window.AndroidStation = {
+      appInfo: () => JSON.stringify({ ok: true, version: '1.0', android: 34, model: 'Pixel' }),
+      listTransports: () => JSON.stringify({ ok: true, transports: ['usb', 'spp', 'ble'] }),
+      listDevices: kind => JSON.stringify({
+        ok: true,
+        devices: kind === 'spp'
+          ? [{ id: 'AA:BB:CC', name: 'ArduSimple BT', detail: 'paired · AA:BB:CC' }]
+          : [{ id: 'usb1', name: 'u-blox GNSS receiver', detail: 'u-blox · 1546:01a9' }]
+      }),
+      connect: json => {
+        const o = JSON.parse(json);
+        window.__mock.connects.push(o);
+        setTimeout(() => emit({ type: 'status', state: 'connected', name: 'u-blox GNSS receiver', kind: o.kind, detail: 'u-blox GNSS receiver · USB ' + o.baudRate }), 10);
+        return JSON.stringify({ ok: true, pending: true });
+      },
+      write: b64 => { window.__mock.written.push(b64); return JSON.stringify({ ok: true }); },
+      disconnect: () => JSON.stringify({ ok: true }),
+      sourcetable: json => {
+        const o = JSON.parse(json);
+        setTimeout(() => emit({
+          type: 'sourcetable', requestId: o.requestId, ok: true,
+          text: 'STR;VRS_RTCM32;Network;RTCM 3.2;1005(1),1074(1);2;GPS+GLO;NET;USA;33.90;-117.40;1;0;sNTRIP;none;B;N;9600;'
+        }), 10);
+        return JSON.stringify({ ok: true, pending: true });
+      },
+      ntripConnect: json => {
+        window.__mock.ntrip = JSON.parse(json);
+        setTimeout(() => {
+          emit({ type: 'ntrip', state: 'on', mount: window.__mock.ntrip.mount });
+          emit({ type: 'ntripStats', bytes: 4096, lastDataAt: Date.now(), types: [[1005, 2], [1074, 12]] });
+        }, 10);
+        return JSON.stringify({ ok: true, pending: true });
+      },
+      ntripDisconnect: () => JSON.stringify({ ok: true }),
+      _nmea: text => emit({ type: 'data', b64: btoa(text) })
+    };
+  });
+  const np = await nctx.newPage();
+  const nerrors = [];
+  np.on('pageerror', e => nerrors.push('pageerror: ' + e.message));
+  await np.goto(BASE, { waitUntil: 'networkidle' });
+
+  await np.click('.tab[data-tab="project"]');
+  await np.setInputFiles('#fileInput', path.join(FIX, 'track.gpx'));
+  await np.waitForFunction(() => document.getElementById('fileMsg').textContent.includes('GPX'));
+  await np.click('.tab[data-tab="rover"]');
+  await np.click('#srcSeg .seg-btn[data-source="rover"]');
+
+  ok('the app knows it is running natively', (await np.textContent('#sourceNote')).includes('Android app'),
+     await np.textContent('#sourceNote'));
+  ok('paired-Bluetooth option appears', await np.isVisible('#btnSpp'));
+  ok('desktop serial option is hidden', await np.isHidden('#btnSerial'));
+  const ntripNote = await np.textContent('#ntripNote');
+  ok('the relay wording is replaced', /no relay/.test(ntripNote) && !/this site's relay/.test(ntripNote), ntripNote);
+
+  await np.click('#btnUsb');
+  await np.waitForFunction(() => document.getElementById('roverMsg').textContent.includes('Connected'), null, { timeout: 8000 });
+  ok('a single device connects without a picker', (await np.textContent('#roverMsg')).includes('u-blox'),
+     await np.textContent('#roverMsg'));
+  const connectArgs = await np.evaluate(() => window.__mock.connects[0]);
+  ok('the device id and baud rate are passed through',
+     connectArgs.kind === 'usb' && connectArgs.id === 'usb1' && connectArgs.baudRate === 38400, JSON.stringify(connectArgs));
+
+  await np.evaluate(([g, s]) => { window.AndroidStation._nmea(s + '\r\n' + g + '\r\n'); }, [texts.gga, texts.gst]);
+  await np.waitForTimeout(200);
+  ok('NMEA from the shell drives the fix', (await np.textContent('#sQuality')).includes('RTK FIX'),
+     await np.textContent('#sQuality'));
+  await np.click('.tab[data-tab="track"]');
+  ok('station reads through the native link', /^\d+\+\d/.test((await np.textContent('#staBig')).trim()),
+     await np.textContent('#staBig'));
+  await np.click('.tab[data-tab="rover"]');
+
+  await np.fill('#ntHost', 'rtk.example.com');
+  await np.fill('#ntUser', 'crew14');
+  await np.fill('#ntPass', 'secret');
+  await np.click('#btnMounts');
+  await np.waitForFunction(() => document.getElementById('mountTable').children.length > 0, null, { timeout: 8000 });
+  ok('mountpoints come back through the shell', (await np.textContent('#mountTable')).includes('VRS_RTCM32'),
+     await np.textContent('#mountTable'));
+  ok('the VRS mountpoint is flagged', (await np.textContent('#mountTable')).includes('VRS'));
+
+  await np.click('#mountTable .linerow');
+  await np.click('#btnNtrip');
+  await np.waitForFunction(() => document.getElementById('nState').textContent.includes('streaming'), null, { timeout: 8000 });
+  ok('corrections report as streaming', (await np.textContent('#nState')).includes('VRS_RTCM32'),
+     await np.textContent('#nState'));
+  await np.waitForFunction(() => document.getElementById('nTypes').textContent.includes('1074'), null, { timeout: 5000 });
+  ok('RTCM message types are shown', (await np.textContent('#nTypes')).includes('1005'),
+     await np.textContent('#nTypes'));
+  ok('correction volume is shown', /kB|B/.test(await np.textContent('#nBytes')), await np.textContent('#nBytes'));
+  const passed = await np.evaluate(() => window.__mock.ntrip);
+  ok('caster credentials reach the shell', passed.user === 'crew14' && passed.pass === 'secret' && passed.mount === 'VRS_RTCM32',
+     JSON.stringify({ ...passed, pass: '***' }));
+
+  // The whole point of the native path: corrections do not come back through
+  // the page to be forwarded byte by byte.
+  const written = await np.evaluate(() => window.__mock.written.length);
+  ok('RTCM is not round-tripped through the page', written === 0, `${written} writes`);
+  ok('no page errors in the native shell', nerrors.length === 0, nerrors.join(' | '));
+  await np.screenshot({ path: path.join(__dirname, 'shot-native.png'), fullPage: true });
+  await nctx.close();
+
   ok('no page errors', errors.length === 0, errors.join(' | '));
 
   console.log(`\n${pass} passed, ${fail} failed`);

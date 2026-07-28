@@ -62,7 +62,13 @@ readout is as good as the fix behind it.
 | **USB (WebUSB)** | Android Chrome, desktop Chrome/Edge | An OTG cable to the board's USB port. The ZED-F9P's native USB is a CDC serial port, so it connects directly. The steadiest link, and it powers the board. |
 | **Bluetooth LE** | Android Chrome, desktop Chrome/Edge | Nordic UART, u-blox SPS, HM-10 and Feasycom serial profiles. **Classic Bluetooth SPP — the XBee-socket Bluetooth module — cannot be reached by any browser**, because pairing happens at the OS level. That module works in SurPad and will not work here; use the cable or a BLE module. |
 | **Serial port** | Desktop Chrome/Edge | For a laptop on the tailgate. |
-| **Nothing at all** | iPhone / iPad | iOS has no WebUSB, Web Serial or Web Bluetooth in any browser, Safari or otherwise. On iOS this app is limited to the phone's GPS unless it is wrapped as a native app. |
+| **Nothing at all** | iPhone / iPad | iOS has no WebUSB, Web Serial or Web Bluetooth in any browser, Safari or otherwise. On iOS this is limited to the phone's GPS. |
+
+**The Android app removes every one of those limits** — including classic
+Bluetooth SPP, which no browser can reach — and talks to the caster directly
+with no relay. Same screens, same engine; see [`../android/README.md`](../android/README.md).
+The web app stays the way in for a laptop, a quick look, or anyone without the
+APK installed.
 
 What is read from the receiver: position, fix quality (RTK fixed / float / DGPS /
 single), satellite count, HDOP and PDOP, age of corrections, base station ID,
@@ -114,6 +120,12 @@ fenced:
 | `NTRIP_MAX_SESSIONS` | `8` | concurrent streams |
 | `NTRIP_PORTS` | — | extra permitted ports |
 | `NTRIP_IDLE_MS` | `60000` | drop a stream that goes quiet |
+
+Any caster works the same way: a paid subscription network, a state CORS system,
+or RTK2go. Enter the host, port, mountpoint and login, and pick the mountpoint
+from the list. If your provider uses a port outside 2101–2199 (or 80/443/8080),
+add it to `NTRIP_PORTS` — or use the Android app, which has no such restriction
+because the phone dials the caster itself.
 
 If the receiver already handles its own corrections — an ESP32 WiFi NTRIP
 Master, or a base radio — leave the NTRIP section empty. The app just reads the
@@ -167,6 +179,7 @@ js/dxf.js       DXF entities
 js/nmea.js      NMEA reader — fix quality, accuracy, corrections age
 js/rover.js     WebUSB / Web Serial / Web Bluetooth links to a receiver
 js/ntrip.js     NTRIP client, sourcetable, RTCM framing
+js/native.js    bridge to the Android shell, when running inside it
 js/map.js       canvas plan view
 js/app.js       wiring, GPS, georeferencing UI, log
 test/run.js     browser test suite
