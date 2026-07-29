@@ -8,6 +8,7 @@ import { RoverLink, support as webSupport } from './rover.js';
 import { NmeaReader, buildGGA } from './nmea.js';
 import { NtripClient, casterDistanceKm } from './ntrip.js';
 import { isNative, NativeLink, NativeNtrip, nativeInfo } from './native.js';
+import { summarise, formatDistance, formatArea, formatGrade, setFootMetres } from './measure.js';
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = 'station.project.v1';
@@ -16,10 +17,33 @@ const MAX_STORE = 3_500_000;
 
 const UNIT_M = { meter: 1, foot: M_PER_INTL_FT, usfoot: M_PER_US_FT };
 
+/**
+ * Which foot is in force. A grid file states its own — a LandXML that says
+ * USSurveyFoot is not negotiable — otherwise it is the user's setting.
+ */
+function footMetres() {
+  if (state.file && state.file.crs === 'grid' && state.file.linearUnit && state.file.linearUnit !== 'meter') {
+    return UNIT_M[state.file.linearUnit];
+  }
+  return UNIT_M[state.foot] ?? M_PER_US_FT;
+}
+
+/** Short code for exports, where "ft" alone is not good enough. */
+function unitCode() {
+  if (unitLabel() === 'm') return 'm';
+  return footMetres() === M_PER_US_FT ? 'usft' : 'ift';
+}
+
+function footName() {
+  if (unitLabel() === 'm') return 'metres';
+  return footMetres() === M_PER_US_FT ? 'US survey feet' : 'international feet';
+}
+
 const state = {
   file: null,          // parse result
   lineId: null,
   units: 'ft',         // display system for geographic files; forced by the file for grid files
+  foot: 'usfoot',      // which foot: US survey (the default on US plans) or international
   interval: 100,
   decimals: 2,
   staStart: 0,
@@ -32,6 +56,9 @@ const state = {
   target: null,
   smooth: true,
   demo: false,
+  measure: { mode: 'distance', points: [], active: false },
+  saved: [],           // finished measurements
+  pinTarget: null,     // id of the pin being navigated to
   source: 'phone',     // 'phone' | 'rover'
   baud: 38400,
   antenna: 0,          // rod height, in display units
@@ -58,6 +85,11 @@ function unitLabel() {
 function metresPerFileUnit() {
   return UNIT_M[state.file?.linearUnit] ?? 1;
 }
+/** Keep the measuring module on the same foot as everything else. */
+function applyFootSetting() {
+  setFootMetres(footMetres());
+}
+
 function unitsPerMetre() {
   if (!state.file) return 1;
   if (state.file.crs === 'grid') {
@@ -65,7 +97,7 @@ function unitsPerMetre() {
     // geometry, so derive it from the fitted scale rather than a nominal factor.
     return state.transform ? 1 / state.transform.scale : 1;
   }
-  return state.units === 'ft' ? 1 / M_PER_INTL_FT : 1;
+  return state.units === 'ft' ? 1 / footMetres() : 1;
 }
 
 /* ─────────────────────── build the alignment ─────────────────────── */
@@ -149,7 +181,11 @@ async function loadFile(file) {
 
     if (parsed.crs === 'grid') {
       state.units = (parsed.linearUnit || 'meter') === 'meter' ? 'm' : 'ft';
+      // The file's declared foot wins over the setting — a LandXML that says
+      // USSurveyFoot is not a preference.
+      if (parsed.linearUnit === 'usfoot' || parsed.linearUnit === 'foot') state.foot = parsed.linearUnit;
     }
+    applyFootSetting();
     state.interval = state.units === 'm' ? 1000 : 100;
 
     const bits = [`${parsed.source} · ${parsed.lines.length} line${parsed.lines.length > 1 ? 's' : ''}`];
@@ -353,7 +389,7 @@ function onRoverFix(fix) {
 
 function antennaMetres() {
   const v = Number(state.antenna) || 0;
-  return unitLabel() === 'ft' ? v * M_PER_INTL_FT : v;
+  return unitLabel() === 'ft' ? v * footMetres() : v;
 }
 
 function onRoverStatus(s) {
@@ -672,7 +708,7 @@ function setDemo(on) {
 
 /* ─────────────────────────── rendering ─────────────────────────── */
 
-function renderAll() { renderReadout(); renderTiles(); renderTarget(); view.draw(); }
+function renderAll() { renderReadout(); renderTiles(); renderTarget(); renderMeasure(false); view.draw(); }
 
 function renderBadge() {
   const el = $('fixBadge');
@@ -687,7 +723,7 @@ function renderElevation() {
   const u = unitLabel();
   const ele = lastFix?.ele;
   if (ele == null || !isFinite(ele)) { el.textContent = ''; return; }
-  const v = u === 'ft' ? ele / M_PER_INTL_FT : ele;
+  const v = u === 'ft' ? ele / footMetres() : ele;
   const rod = Number(state.antenna) || 0;
   el.textContent = `EL ${v.toFixed(state.decimals)} ${u}` + (rod ? ` · rod ${rod} ${u}` : '');
 }
@@ -757,6 +793,27 @@ function renderTiles() {
 function renderTarget() {
   const out = $('targetOut');
   const al = state.alignment;
+
+  // Navigating to a pin: straight line and bearing, the way you would walk it.
+  if (state.pinTarget) {
+    const pin = state.marks.find(p => p.id === state.pinTarget);
+    if (!pin || pin.x == null) { state.pinTarget = null; }
+    else {
+      view.target = { x: pin.x, y: pin.y, label: pin.label };
+      const u = unitLabel();
+      const bits = [`→ ${pin.label}`];
+      if (lastFix && lastFix.x != null) {
+        const dx = pin.x - lastFix.x, dy = pin.y - lastFix.y;
+        bits.push(`${fmt(Math.hypot(dx, dy) * (al ? al.unitsPerMetre : (u === 'ft' ? 1 / footMetres() : 1)), 2)} ${u}`);
+        bits.push(quadrantBearing(azimuth(dx, dy), { seconds: false }));
+      } else if (pin.station != null) {
+        bits.push(`STA ${formatStation(pin.station, state.interval, state.decimals)}`);
+      }
+      out.textContent = bits.join(' · ');
+      return;
+    }
+  }
+
   if (state.target == null || !al) { out.textContent = '—'; view.target = null; return; }
   const d = al.distanceAtStation(state.target);
   if (d == null) { out.textContent = 'that station is off this alignment'; view.target = null; return; }
@@ -781,6 +838,311 @@ function setPill(cls, text) {
 
 const fmt = (v, d = 2) => (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(d);
 
+/* ─────────────────────────── measuring ─────────────────────────── */
+
+let pinMode = false;
+
+/**
+ * A measured point. Where it came from matters: a point taken standing on it
+ * carries the fix quality that earned it, one tapped on the map does not, and
+ * the export says which is which.
+ */
+function measurePoint(x, y, source, ele) {
+  const p = { x, y, source, ele: ele ?? null };
+  if (state.frame) {
+    const ll = state.frame.toLL(x, y);
+    p.lat = ll.lat; p.lon = ll.lon;
+  }
+  if (state.alignment) {
+    const proj = state.alignment.project(x, y);
+    if (proj) { p.station = proj.station; p.offset = proj.offsetDisplay; }
+  }
+  return p;
+}
+
+function addMeasurePoint(x, y, source, ele) {
+  state.measure.active = true;
+  state.measure.points.push(measurePoint(x, y, source, ele));
+  renderMeasure();
+  save();
+}
+
+function addMeasurePointHere() {
+  if (!lastFix || lastFix.x == null) {
+    flash($('fileMsg'), 'err', 'No position yet.');
+    showTab('measure');
+    $('measureSub').textContent = 'No position yet — start GPS, connect the receiver, or tap the map instead.';
+    return;
+  }
+  addMeasurePoint(lastFix.x, lastFix.y, lastFix.q?.source || 'gps', lastFix.ele);
+  if (navigator.vibrate) navigator.vibrate(20);
+}
+
+function renderMeasure(redraw = true) {
+  const m = state.measure;
+  const units = unitLabel();
+  const big = $('measureBig'), sub = $('measureSub');
+  const stats = $('measureStats');
+
+  // The live leg runs from the last point to wherever you are standing.
+  const live = (lastFix && lastFix.x != null) ? { x: lastFix.x, y: lastFix.y, ele: lastFix.ele ?? null } : null;
+  view.measure = m.points.length ? { mode: m.mode, points: m.points, live } : null;
+
+  // Everything quoted describes the placed points. Where you are standing shows
+  // up as a hint, never inside the total, so the saved number is the shown one.
+  const chain = m.points;
+  const enough = m.mode === 'area' ? chain.length >= 3 : chain.length >= 2;
+  const toYou = (live && m.points.length)
+    ? Math.hypot(live.x - m.points[m.points.length - 1].x, live.y - m.points[m.points.length - 1].y)
+    : null;
+  stats.hidden = !enough;
+  $('mCount').textContent = String(m.points.length);
+  $('measureStrip').hidden = !(m.active || m.points.length);
+  $('stripLabel').textContent = m.mode === 'area'
+    ? `Area · ${m.points.length} pts` : `Distance · ${m.points.length} pts`;
+
+  if (!enough) {
+    $('stripValue').textContent = '—';
+    big.textContent = '—';
+    sub.textContent = m.points.length
+      ? (m.mode === 'area' ? 'Three points make an area.' : 'One more point makes a distance.')
+      : 'Add points to start measuring';
+    renderVertices();
+    if (redraw) view.draw();
+    return;
+  }
+
+  const s = summarise(chain, m.mode, units, state.decimals);
+  $('stripValue').textContent = m.mode === 'area' ? s.areaText.primary : s.totalText;
+  if (m.mode === 'area') {
+    big.textContent = s.areaText.primary;
+    sub.textContent = `${s.areaText.secondary} · perimeter ${s.perimeterText}` +
+      (s.crossed ? ' · the outline crosses itself, so this area is not what you want' : '') +
+      (toYou != null ? ` · ${formatDistance(toYou, units, state.decimals)} to you` : '');
+    $('kA').textContent = 'Perimeter';
+    $('mTotal').textContent = s.perimeterText;
+    $('kB').textContent = 'Area';
+    $('mStraight').textContent = s.areaText.secondary;
+  } else {
+    big.textContent = s.totalText;
+    sub.textContent = `straight line ${s.straightText}` +
+      (toYou != null ? ` · ${formatDistance(toYou, units, state.decimals)} to you` : '');
+    $('kA').textContent = 'Total';
+    $('mTotal').textContent = s.totalText;
+    $('kB').textContent = 'Straight line';
+    $('mStraight').textContent = s.straightText;
+  }
+  $('mLast').textContent = s.lastText || '—';
+  $('mGrade').textContent = s.lastGrade || '—';
+  $('mRise').textContent = s.dzText || '—';
+
+  renderVertices();
+  if (redraw) view.draw();
+}
+
+function renderVertices() {
+  const list = $('vertexList');
+  const m = state.measure;
+  list.innerHTML = '';
+  if (!m.points.length) return;
+  const units = unitLabel();
+  const segs = summarise(m.points, m.mode, units, state.decimals).segments;
+
+  m.points.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'logrow';
+    const main = document.createElement('div');
+    main.className = 'logrow-main';
+    const head = document.createElement('div');
+    head.className = 'logrow-sta';
+    const leg = segs[i - 1];
+    head.textContent = `${i + 1}` + (leg ? ` · ${formatDistance(leg.horizontal, units, state.decimals)}` : ' · start');
+    const sub = document.createElement('div');
+    sub.className = 'logrow-sub';
+    sub.textContent = [
+      p.station != null ? `STA ${formatStation(p.station, state.interval, state.decimals)}` : null,
+      p.offset != null ? formatOffset(p.offset, units, state.decimals) : null,
+      p.ele != null ? `EL ${fmt(units === 'ft' ? p.ele / footMetres() : p.ele, 2)} ${units}` : null,
+      p.source === 'map' ? 'tapped on the map' : null
+    ].filter(Boolean).join(' · ');
+    main.append(head, sub);
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.type = 'button';
+    del.setAttribute('aria-label', `Delete point ${i + 1}`);
+    del.textContent = '✕';
+    del.onclick = () => { m.points.splice(i, 1); renderMeasure(); save(); };
+    row.append(main, del);
+    list.append(row);
+  });
+}
+
+function saveMeasurement() {
+  const m = state.measure;
+  const need = m.mode === 'area' ? 3 : 2;
+  if (m.points.length < need) {
+    $('measureSub').textContent = `Need at least ${need} points to save this.`;
+    return;
+  }
+  const units = unitLabel();
+  const s = summarise(m.points, m.mode, units, state.decimals);
+  const name = $('measureName').value.trim();
+  state.saved.push({
+    id: `m${Date.now()}`,
+    name: name || (m.mode === 'area' ? `Area ${state.saved.length + 1}` : `Distance ${state.saved.length + 1}`),
+    mode: m.mode,
+    unit: units,
+    points: m.points.map(p => ({ ...p })),
+    total: s.total,
+    straight: s.straight,
+    area: s.area ?? null,
+    perimeter: s.perimeter ?? null,
+    t: Date.now()
+  });
+  $('measureName').value = '';
+  state.measure = { mode: m.mode, points: [], active: false };
+  setMeasuring(false);
+  renderSaved();
+  save();
+}
+
+function renderSaved() {
+  const list = $('savedList');
+  $('savedCount').textContent = String(state.saved.length);
+  if (!state.saved.length) {
+    list.innerHTML = '<p class="muted">Nothing saved yet.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  state.saved.slice().reverse().forEach(entry => {
+    const i = state.saved.indexOf(entry);
+    const row = document.createElement('div');
+    row.className = 'logrow';
+    const main = document.createElement('div');
+    main.className = 'logrow-main';
+    const head = document.createElement('div');
+    head.className = 'logrow-sta';
+    head.textContent = entry.mode === 'area'
+      ? formatArea(entry.area, entry.unit).primary
+      : formatDistance(entry.total, entry.unit, state.decimals);
+    const sub = document.createElement('div');
+    sub.className = 'logrow-sub';
+    sub.textContent = [
+      entry.name,
+      entry.mode === 'area'
+        ? `${formatArea(entry.area, entry.unit).secondary} · perimeter ${formatDistance(entry.perimeter, entry.unit, state.decimals)}`
+        : `${entry.points.length} points · straight ${formatDistance(entry.straight, entry.unit, state.decimals)}`,
+      new Date(entry.t).toLocaleString()
+    ].filter(Boolean).join(' · ');
+    main.append(head, sub);
+
+    const load = document.createElement('button');
+    load.className = 'icon-btn';
+    load.type = 'button';
+    load.title = 'Show on the map';
+    load.textContent = '↺';
+    load.onclick = () => {
+      state.measure = { mode: entry.mode, points: entry.points.map(p => ({ ...p })) };
+      document.querySelectorAll('#measureSeg .seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.mode === entry.mode));
+      renderMeasure();
+      showTab('track');
+    };
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.type = 'button';
+    del.textContent = '✕';
+    del.onclick = () => { state.saved.splice(i, 1); renderSaved(); save(); };
+    row.append(main, load, del);
+    list.append(row);
+  });
+}
+
+function exportMeasurements() {
+  if (!state.saved.length) return;
+  const head = ['measurement', 'type', 'point', 'station', 'offset', 'unit', 'latitude', 'longitude',
+    'elevation_m', 'leg', 'running_total', 'total', 'area', 'area_secondary', 'perimeter', 'source', 'timestamp'];
+  const rows = [];
+  for (const entry of state.saved) {
+    const s = summarise(entry.points, entry.mode, entry.unit, state.decimals);
+    let running = 0;
+    entry.points.forEach((p, i) => {
+      const leg = s.segments[i - 1];
+      if (leg) running += leg.horizontal;
+      rows.push([
+        entry.name, entry.mode, i + 1,
+        p.station != null ? formatStation(p.station, state.interval, state.decimals) : '',
+        p.offset != null ? p.offset.toFixed(3) : '',
+        entry.unit,
+        p.lat != null ? p.lat.toFixed(9) : '', p.lon != null ? p.lon.toFixed(9) : '',
+        p.ele != null ? p.ele.toFixed(3) : '',
+        leg ? toUnit(leg.horizontal, entry.unit).toFixed(3) : '',
+        toUnit(running, entry.unit).toFixed(3),
+        i === 0 ? toUnit(entry.total, entry.unit).toFixed(3) : '',
+        i === 0 && entry.area != null ? formatArea(entry.area, entry.unit).primary : '',
+        i === 0 && entry.area != null ? formatArea(entry.area, entry.unit).secondary : '',
+        i === 0 && entry.perimeter != null ? toUnit(entry.perimeter, entry.unit).toFixed(3) : '',
+        p.source || '',
+        i === 0 ? new Date(entry.t).toISOString() : ''
+      ]);
+    });
+  }
+  const csv = [head, ...rows].map(r => r.map(v => /[",\n]/.test(String(v)) ? `"${v}"` : v).join(',')).join('\n');
+  download(`${slug(state.alignment?.name || 'station')}-measurements.csv`, csv, 'text/csv');
+}
+
+function exportMeasurementsGeo() {
+  if (!state.saved.length) return;
+  const features = state.saved
+    .filter(e => e.points.every(p => p.lat != null))
+    .map(e => {
+      const ring = e.points.map(p => [Number(p.lon.toFixed(8)), Number(p.lat.toFixed(8))]);
+      const closed = e.mode === 'area';
+      if (closed && ring.length > 2) ring.push(ring[0]);
+      return {
+        type: 'Feature',
+        geometry: closed && ring.length > 3
+          ? { type: 'Polygon', coordinates: [ring] }
+          : { type: 'LineString', coordinates: ring },
+        properties: {
+          name: e.name,
+          type: e.mode,
+          unit: e.unit,
+          total: Number(toUnit(e.total, e.unit).toFixed(3)),
+          area: e.area != null ? formatArea(e.area, e.unit).primary : null,
+          area_secondary: e.area != null ? formatArea(e.area, e.unit).secondary : null,
+          perimeter: e.perimeter != null ? Number(toUnit(e.perimeter, e.unit).toFixed(3)) : null,
+          time: new Date(e.t).toISOString()
+        }
+      };
+    });
+  if (!features.length) return;
+  download(`${slug(state.alignment?.name || 'station')}-measurements.geojson`,
+    JSON.stringify({ type: 'FeatureCollection', features }, null, 1), 'application/geo+json');
+}
+
+const toUnit = (metres, unit) => unit === 'ft' ? metres / footMetres() : metres;
+
+/** One tap on the map means different things depending on what you are doing. */
+function onMapTap(x, y, pinIndex) {
+  if (state.measure.active) { addMeasurePoint(x, y, 'map', null); return; }
+  if (pinMode) { dropPinAt(x, y); return; }
+  if (pinIndex != null) { selectPin(pinIndex); return; }
+}
+
+/**
+ * Measuring is armed rather than tab-bound: the map lives on the Track tab, and
+ * that is where the taps have to land.
+ */
+function setMeasuring(on) {
+  state.measure.active = on;
+  pinMode = pinMode && !on;      // one map gesture at a time
+  $('btnPinMode').classList.toggle('is-on', pinMode);
+  $('btnStartMeasure').textContent = on ? 'Measuring…' : 'Start measuring';
+  $('btnStartMeasure').classList.toggle('on', on);
+  renderMeasure();
+  save();
+}
+
 /* ─────────────────────────── marks & export ─────────────────────────── */
 
 function addMark() {
@@ -792,10 +1154,13 @@ function addMark() {
   const note = $('markNote').value.trim();
   const q = lastFix.q || {};
   state.marks.push({
+    id: `p${Date.now()}`,
+    label: note || `Pin ${state.marks.length + 1}`,
     t: Date.now(),
     station: p.station,
     offset: p.offsetDisplay,
     unit: unitLabel(),
+    unitCode: unitCode(),
     lat: lastFix.lat ?? null,
     lon: lastFix.lon ?? null,
     acc: lastFix.acc ?? null,
@@ -819,6 +1184,42 @@ function addMark() {
   renderLog();
   save();
   if (navigator.vibrate) navigator.vibrate(25);
+}
+
+/** A pin placed by tapping the plan, rather than by standing on it. */
+function dropPinAt(x, y) {
+  const proj = state.alignment ? state.alignment.project(x, y) : null;
+  const ll = state.frame ? state.frame.toLL(x, y) : null;
+  const label = $('markNote').value.trim();
+  state.marks.push({
+    id: `p${Date.now()}`,
+    label: label || `Pin ${state.marks.length + 1}`,
+    t: Date.now(),
+    station: proj ? proj.station : null,
+    offset: proj ? proj.offsetDisplay : null,
+    unit: unitLabel(),
+    lat: ll ? ll.lat : null,
+    lon: ll ? ll.lon : null,
+    acc: null, ele: null,
+    // No fix quality, because nobody stood here — the export says so plainly.
+    fix: 'MAP', source: 'map',
+    note: '', x, y
+  });
+  $('markNote').value = '';
+  renderLog();
+  save();
+  view.draw();
+}
+
+function selectPin(index) {
+  view.selectedMark = index;
+  const m = state.marks[index];
+  if (!m) return;
+  state.pinTarget = m.id;
+  state.target = null;
+  $('targetSta').value = '';
+  renderTarget();
+  view.draw();
 }
 
 function refreshMarkXY() {
@@ -851,7 +1252,9 @@ function renderLog() {
     main.className = 'logrow-main';
     const sta = document.createElement('div');
     sta.className = 'logrow-sta';
-    sta.textContent = `${formatStation(m.station, state.interval, state.decimals)}  ${formatOffset(m.offset, m.unit, state.decimals)}`;
+    sta.textContent = m.station != null
+      ? `${formatStation(m.station, state.interval, state.decimals)}  ${formatOffset(m.offset, m.unit, state.decimals)}`
+      : (m.label || 'Pin');
     const sub = document.createElement('div');
     sub.className = 'logrow-sub';
     sub.textContent = [
@@ -859,23 +1262,44 @@ function renderLog() {
       m.fix || null,
       m.lat != null ? `${m.lat.toFixed(7)}, ${m.lon.toFixed(7)}` : null,
       m.acc != null ? `±${fmtAcc(m.acc)}` : null,
-      m.ele != null ? `EL ${fmt(m.unit === 'ft' ? m.ele / M_PER_INTL_FT : m.ele, 2)} ${m.unit}` : null,
+      m.ele != null ? `EL ${fmt(m.unit === 'ft' ? m.ele / footMetres() : m.ele, 2)} ${m.unit}` : null,
       m.demo ? 'DEMO' : null
     ].filter(Boolean).join(' · ');
     main.append(sta, sub);
-    if (m.note) {
+    if (m.label && m.station != null) {
+      const label = document.createElement('div');
+      label.className = 'logrow-note';
+      label.textContent = m.label;
+      main.append(label);
+    }
+    if (m.note && m.note !== m.label) {
       const note = document.createElement('div');
       note.className = 'logrow-note';
       note.textContent = m.note;
       main.append(note);
     }
+    row.classList.toggle('is-on', state.pinTarget === m.id);
+
+    const go = document.createElement('button');
+    go.className = 'icon-btn';
+    go.type = 'button';
+    go.title = 'Navigate to this pin';
+    go.setAttribute('aria-label', 'Navigate to this pin');
+    go.textContent = '➤';
+    go.onclick = () => { selectPin(i); renderLog(); showTab('track'); };
+
     const del = document.createElement('button');
     del.className = 'icon-btn';
     del.type = 'button';
-    del.setAttribute('aria-label', 'Delete mark');
+    del.setAttribute('aria-label', 'Delete pin');
     del.textContent = '✕';
-    del.onclick = () => { state.marks.splice(i, 1); refreshMarkXY(); renderLog(); save(); view.draw(); };
-    row.append(main, del);
+    del.onclick = () => {
+      if (state.pinTarget === m.id) { state.pinTarget = null; view.target = null; }
+      state.marks.splice(i, 1);
+      view.selectedMark = null;
+      refreshMarkXY(); renderLog(); renderTarget(); save(); view.draw();
+    };
+    row.append(main, go, del);
     list.append(row);
   });
   refreshMarkXY();
@@ -899,7 +1323,7 @@ function exportCsv() {
     formatStation(m.station, state.interval, state.decimals),
     m.station.toFixed(3),
     m.offset.toFixed(3),
-    m.unit,
+    m.unitCode || m.unit,
     m.lat != null ? m.lat.toFixed(9) : '', m.lon != null ? m.lon.toFixed(9) : '',
     m.ele != null ? m.ele.toFixed(3) : '',
     m.ellipsoidAlt != null ? m.ellipsoidAlt.toFixed(3) : '',
@@ -927,7 +1351,7 @@ function exportGeoJson() {
       n: i + 1,
       station: formatStation(m.station, state.interval, state.decimals),
       offset: Number(m.offset.toFixed(3)),
-      unit: m.unit,
+      unit: m.unitCode || m.unit,
       elevation_m: m.ele != null ? Number(m.ele.toFixed(3)) : null,
       fix: m.fix || null,
       sats: m.sats ?? null,
@@ -999,7 +1423,8 @@ function renderProjectTab() {
   const al = state.alignment;
   $('alignSummary').textContent = al
     ? `${al.name} · ${fmt(al.lengthDisplay, 2)} ${unitLabel()} long · ` +
-      `${formatStation(al.stationAt(0), state.interval, state.decimals)} to ${formatStation(al.stationAt(al.length), state.interval, state.decimals)}`
+      `${formatStation(al.stationAt(0), state.interval, state.decimals)} to ${formatStation(al.stationAt(al.length), state.interval, state.decimals)}` +
+      ` · ${footName()}`
     : '';
 
   renderEquations();
@@ -1054,7 +1479,7 @@ function renderControl() {
   out.innerHTML =
     `<b>Georeferenced from ${state.control.length} point${state.control.length > 1 ? 's' : ''}.</b> ` +
     `Grid north is rotated ${fmt(t.rotation > 180 ? t.rotation - 360 : t.rotation, 3)}° from true north · ` +
-    `scale ${t.scale.toFixed(7)} m per ${u === 'ft' ? 'foot' : 'unit'}<br>` +
+    `scale ${t.scale.toFixed(7)} m per ${u === 'ft' ? (state.file.linearUnit === 'usfoot' ? 'US survey foot' : 'foot') : 'unit'}<br>` +
     (state.control.length > 1
       ? `RMS residual <b>${fmt(t.rms * unitsPerMetre(), 2)} ${u}</b>${res ? ' · ' + res : ''}`
       : 'Single point — grid north assumed true and scale taken from the file units. Expect metres of error over any distance.');
@@ -1143,7 +1568,7 @@ function flash(el, cls, text) {
 /* ─────────────────────────── settings inputs ─────────────────────────── */
 
 function syncSettingsInputs() {
-  $('selUnit').value = state.units;
+  $('selUnit').value = state.units === 'm' ? 'm' : state.foot;
   $('selUnit').disabled = state.file?.crs === 'grid';
   $('selInterval').value = String(state.interval);
   $('selDecimals').value = String(state.decimals);
@@ -1179,11 +1604,12 @@ function doSave() {
     v: 1,
     file: state.file,
     lineId: state.lineId,
-    units: state.units, interval: state.interval, decimals: state.decimals,
+    units: state.units, foot: state.foot, interval: state.interval, decimals: state.decimals,
     staStart: state.staStart, equations: state.equations,
     control: state.control, transform: state.transform,
     frame: state.frame ? state.frame.toJSON() : null,
-    marks: state.marks, target: state.target, smooth: state.smooth
+    marks: state.marks, target: state.target, smooth: state.smooth,
+    measure: state.measure, saved: state.saved, pinTarget: state.pinTarget
   };
   let text = JSON.stringify(payload);
   if (text.length > MAX_STORE) {
@@ -1204,6 +1630,7 @@ function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       source: state.source, baud: state.baud, antenna: state.antenna, smooth: state.smooth,
+      units: state.units, foot: state.foot,
       ntrip: {
         host: n.host, port: n.port, mount: n.mount, user: n.user, tls: n.tls,
         remember: n.remember,
@@ -1220,9 +1647,13 @@ function restoreSettings() {
   try {
     const s = JSON.parse(raw);
     state.baud = s.baud || state.baud;
+    if (s.units) state.units = s.units;
+    if (s.foot) state.foot = s.foot;
+    if (s.units) state.interval = s.units === 'm' ? 1000 : 100;
     state.antenna = s.antenna || 0;
     if (typeof s.smooth === 'boolean') state.smooth = s.smooth;
     state.ntrip = { ...state.ntrip, ...(s.ntrip || {}) };
+    applyFootSetting();
     setSource(s.source === 'rover' ? 'rover' : 'phone');
   } catch { /* ignore a corrupt blob rather than blocking startup */ }
 }
@@ -1238,14 +1669,21 @@ function restore() {
       file: p.file, lineId: p.lineId, units: p.units, interval: p.interval,
       decimals: p.decimals ?? 2, staStart: p.staStart, equations: p.equations || [],
       control: p.control || [], transform: p.transform || null,
-      marks: p.marks || [], target: p.target ?? null, smooth: p.smooth !== false
+      marks: p.marks || [], target: p.target ?? null, smooth: p.smooth !== false,
+      measure: p.measure && Array.isArray(p.measure.points) ? { active: false, ...p.measure } : { mode: 'distance', points: [], active: false },
+      saved: p.saved || [], pinTarget: p.pinTarget ?? null
     });
     state.frame = LocalFrame.from(p.frame);
+    if (p.foot) state.foot = p.foot;
+    applyFootSetting();
     syncSettingsInputs();
     build();
     if (state.target != null) $('targetSta').value = formatStation(state.target, state.interval, 0);
     renderProjectTab();
     renderLog();
+    renderSaved();
+    renderMeasure();
+    document.querySelectorAll('#measureSeg .seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.mode === state.measure.mode));
     return true;
   } catch (e) {
     console.warn('Could not restore the saved project', e);
@@ -1259,16 +1697,20 @@ function resetProject() {
   setDemo(false);
   Object.assign(state, {
     file: null, lineId: null, staStart: 0, equations: [], control: [],
-    transform: null, frame: null, alignment: null, marks: [], target: null, lastProjection: null
+    transform: null, frame: null, alignment: null, marks: [], target: null, lastProjection: null,
+    measure: { mode: state.measure.mode, points: [], active: false }, saved: [], pinTarget: null
   });
   lastFix = null;
   view.setAlignment(null);
   view.fix = null; view.snap = null; view.marks = []; view.pois = []; view.target = null;
+  view.measure = null; view.selectedMark = null;
   localStorage.removeItem(STORE_KEY);
   $('projectName').textContent = 'No alignment loaded';
   $('fileMsg').hidden = true;
   $('fileInput').value = '';
   renderLog();
+  renderSaved();
+  renderMeasure(false);
   renderProjectTab();
   renderAll();
 }
@@ -1285,6 +1727,7 @@ function showTab(name) {
   $('tab-' + name).classList.add('is-on');
   if (name === 'track') requestAnimationFrame(() => view.draw());
   if (name === 'rover') renderRoverStats();
+  if (name === 'measure') renderMeasure();
 }
 
 function bind() {
@@ -1321,9 +1764,12 @@ function bind() {
 
   // settings
   $('selUnit').onchange = e => {
-    state.units = e.target.value;
+    const v = e.target.value;
+    state.units = v === 'm' ? 'm' : 'ft';
+    if (v !== 'm') state.foot = v;
     state.interval = state.units === 'm' ? 1000 : 100;
-    syncSettingsInputs(); build(); save(); renderProjectTab();
+    applyFootSetting();
+    syncSettingsInputs(); build(); save(); renderProjectTab(); renderLog(); renderSaved();
   };
   $('selInterval').onchange = e => { state.interval = Number(e.target.value); build(); save(); renderProjectTab(); };
   $('selDecimals').onchange = e => { state.decimals = Number(e.target.value); renderAll(); renderLog(); save(); };
@@ -1375,16 +1821,50 @@ function bind() {
     view.draw();
   };
   $('btnFit').onclick = () => { $('btnFollow').classList.remove('is-on'); view.fit(); };
+  $('btnPinMode').onclick = () => {
+    pinMode = !pinMode;
+    if (pinMode && state.measure.active) setMeasuring(false);
+    $('btnPinMode').classList.toggle('is-on', pinMode);
+  };
+
+  // measuring
+  document.querySelectorAll('#measureSeg .seg-btn').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#measureSeg .seg-btn').forEach(x => x.classList.remove('is-on'));
+      b.classList.add('is-on');
+      state.measure.mode = b.dataset.mode;
+      renderMeasure();
+      save();
+    };
+  });
+  $('btnStartMeasure').onclick = () => { setMeasuring(!state.measure.active); if (state.measure.active) showTab('track'); };
+  $('btnAddPoint').onclick = addMeasurePointHere;
+  $('btnUndoPoint').onclick = () => { state.measure.points.pop(); renderMeasure(); save(); };
+  $('btnClearMeasure').onclick = () => { state.measure.points = []; setMeasuring(false); };
+  $('btnStripAdd').onclick = addMeasurePointHere;
+  $('btnStripUndo').onclick = () => { state.measure.points.pop(); renderMeasure(); save(); };
+  $('btnStripSave').onclick = saveMeasurement;
+  $('btnStripStop').onclick = () => { state.measure.points = []; setMeasuring(false); };
+  $('btnSaveMeasure').onclick = saveMeasurement;
+  $('btnExportMeasure').onclick = exportMeasurements;
+  $('btnExportMeasureGeo').onclick = exportMeasurementsGeo;
   $('btnZoomIn').onclick = () => view.zoomBy(1.5, view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
   $('btnZoomOut').onclick = () => view.zoomBy(1 / 1.5, view.canvas.clientWidth / 2, view.canvas.clientHeight / 2);
 
   const onTarget = () => {
     const v = parseStation($('targetSta').value, state.interval);
     state.target = v;
+    if (v != null) { state.pinTarget = null; view.selectedMark = null; }
     renderTarget(); view.draw(); save();
   };
   $('targetSta').oninput = onTarget;
-  $('btnClearTarget').onclick = () => { $('targetSta').value = ''; state.target = null; renderTarget(); view.draw(); save(); };
+  $('btnClearTarget').onclick = () => {
+    $('targetSta').value = '';
+    state.target = null;
+    state.pinTarget = null;
+    view.selectedMark = null;
+    renderTarget(); renderLog(); view.draw(); save();
+  };
 
   // log
   $('btnExportCsv').onclick = exportCsv;
@@ -1402,6 +1882,8 @@ function bind() {
 /* ─────────────────────────── boot ─────────────────────────── */
 
 view = new PlanView($('map'));
+view.onTap = onMapTap;
+applyFootSetting();
 bind();
 
 // Inside the app, several of the browser's limits simply do not apply, and the
@@ -1427,7 +1909,7 @@ new ResizeObserver(setTopH).observe(topbar);
 setTopH();
 
 syncSettingsInputs();
-if (!restore()) { renderProjectTab(); renderLog(); }
+if (!restore()) { renderProjectTab(); renderLog(); renderSaved(); }
 $('btnFollow').classList.toggle('is-on', view.follow);
 renderAll();
 

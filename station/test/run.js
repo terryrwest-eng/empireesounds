@@ -129,6 +129,37 @@ const near = (name, got, want, tol) =>
       i: quadrantBearing(90), j: quadrantBearing(135),
       k: quadrantBearing(89.9999999), l: quadrantBearing(45.5, { seconds: false })
     };
+    // ---- measuring ----
+    const M = await import('./js/measure.js');
+    const sq = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+    const legs = [{ x: 0, y: 0, ele: 10 }, { x: 30, y: 40, ele: 13 }, { x: 30, y: 140, ele: 13 }];
+    M.setFootMetres(1200 / 3937); // US survey foot
+    out.measure = {
+      squareArea: M.area(sq),
+      squarePerimeter: M.perimeter(sq),
+      centroid: M.centroid(sq),
+      lCentroid: M.centroid([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 20 }, { x: 20, y: 20 }, { x: 20, y: 100 }, { x: 0, y: 100 }]),
+      path: M.pathLength(legs),
+      straight: M.straightLine(legs),
+      firstLeg: M.segments(legs)[0],
+      crossed: M.selfIntersects([{ x: 0, y: 0 }, { x: 100, y: 100 }, { x: 100, y: 0 }, { x: 0, y: 100 }]),
+      notCrossed: M.selfIntersects(sq),
+      grade: M.formatGrade(0.06),
+      grade3to1: M.formatGrade(1 / 3),
+      usAcre: M.acreMetres2(),
+      usFoot: M.footMetres(),
+      areaUs: M.formatArea(M.acreMetres2(), 'ft'),
+      distUs: M.formatDistance(1200 / 3937 * 100, 'ft', 3),
+      summary: M.summarise(legs, 'distance', 'ft', 2)
+    };
+    M.setFootMetres(0.3048); // international
+    out.measureIntl = {
+      intlAcre: M.acreMetres2(),
+      distIntl: M.formatDistance(0.3048 * 100, 'ft', 3),
+      areaIntl: M.formatArea(4046.8564224, 'ft')
+    };
+    M.setFootMetres(1200 / 3937);
+
     out.simplify = { before: 5, after: simplify([[0, 0], [1, 0.001], [2, 0], [3, -0.001], [4, 0]], 0.01).length };
 
     // ---- NMEA ----
@@ -241,6 +272,44 @@ const near = (name, got, want, tol) =>
   ok('distance to the base computed', r.ntrip.km >= 20 && r.ntrip.km <= 25, String(r.ntrip.km));
   ok('RTCM message types framed', r.ntrip.types.join() === '1005,1074', r.ntrip.types.join());
 
+  // measuring
+  console.log('\n— measuring —');
+  near('square area', r.measure.squareArea, 10000, 1e-9);
+  near('square perimeter closes the figure', r.measure.squarePerimeter, 400, 1e-9);
+  near('centroid of a square · x', r.measure.centroid.x, 50, 1e-9);
+  near('centroid of a square · y', r.measure.centroid.y, 50, 1e-9);
+  // Two rectangles: 100x20 at (50,10) and 20x80 at (10,60) -> 116000/3600.
+  near('L-shape centroid · x', r.measure.lCentroid.x, 116000 / 3600, 1e-9);
+  near('L-shape centroid · y', r.measure.lCentroid.y, 116000 / 3600, 1e-9);
+  ok('which is not the average of the corners (40, 40)', Math.abs(r.measure.lCentroid.x - 40) > 7);
+  near('path through several points', r.measure.path, 150, 1e-9);
+  near('straight line ignores the dogleg', r.measure.straight, Math.hypot(30, 140), 1e-9);
+  near('leg length', r.measure.firstLeg.horizontal, 50, 1e-9);
+  near('leg bearing', r.measure.firstLeg.bearing, 36.8698976, 1e-6);
+  near('leg rise', r.measure.firstLeg.dz, 3, 1e-9);
+  near('slope distance is longer than horizontal', r.measure.firstLeg.slopeDistance, Math.hypot(50, 3), 1e-9);
+  ok('a bowtie is caught', r.measure.crossed === true);
+  ok('a square is not', r.measure.notCrossed === false);
+  ok('grade reads as a percentage and a ratio', r.measure.grade === '+6.00% · 16.7:1', r.measure.grade);
+  ok('a 3:1 slope is called 3:1', /33\.33% · 3\.0:1/.test(r.measure.grade3to1), r.measure.grade3to1);
+
+  // US survey feet
+  console.log('\n— US survey feet —');
+  near('US survey foot', r.measure.usFoot, 1200 / 3937, 1e-15);
+  near('an acre in US survey feet', r.measure.usAcre, 4046.872609874252, 1e-6);
+  near('an acre in international feet', r.measureIntl.intlAcre, 4046.8564224, 1e-6);
+  ok('the two acres really do differ', Math.abs(r.measure.usAcre - r.measureIntl.intlAcre) > 0.01,
+     `${r.measure.usAcre} vs ${r.measureIntl.intlAcre}`);
+  ok('100 US survey feet reads as 100', r.measure.distUs === '100.000 ft', r.measure.distUs);
+  ok('100 international feet reads as 100', r.measureIntl.distIntl === '100.000 ft', r.measureIntl.distIntl);
+  ok('one US acre prints as 43,560 ft²', r.measure.areaUs.primary.replace(/[,\s]/g, '') === '43560ft²', r.measure.areaUs.primary);
+  ok('and as 1.000 acres', r.measure.areaUs.secondary === '1.000 acres', r.measure.areaUs.secondary);
+  ok('one international acre prints the same way in its own foot',
+     r.measureIntl.areaIntl.secondary === '1.000 acres', r.measureIntl.areaIntl.secondary);
+  ok('summary carries the total and the grade',
+     r.measure.summary.totalText.endsWith('ft') && r.measure.summary.gradeText.includes('%'),
+     JSON.stringify({ t: r.measure.summary.totalText, g: r.measure.summary.gradeText }));
+
   /* ---------------- UI: GPX end to end ---------------- */
   console.log('\n— UI: geographic file —');
   await page.click('.tab[data-tab="project"]');
@@ -266,6 +335,87 @@ const near = (name, got, want, tol) =>
   ok('log row shows the station', (await page.textContent('#logList')).includes(sta.trim()));
   await page.click('.tab[data-tab="track"]');
   await page.screenshot({ path: path.join(__dirname, 'shot-track-gpx.png') });
+
+  /* ---------------- UI: pins ---------------- */
+  console.log('\n— UI: pins —');
+  await page.fill('#markNote', 'hydrant');
+  await page.click('#btnMark');
+  const pinsText = await page.textContent('#logList');
+  ok('a labelled pin is dropped', pinsText.includes('hydrant'), pinsText.slice(0, 120));
+  ok('the pin carries its station', /1[45]\+\d\d/.test(pinsText), pinsText.slice(0, 120));
+
+  await page.click('.tab[data-tab="log"]');
+  await page.click('#logList .logrow button[title="Navigate to this pin"]');
+  const nav = await page.textContent('#targetOut');
+  ok(`navigating to a pin reads out the way there (${nav})`, nav.includes('hydrant') && /ft/.test(nav), nav);
+  await page.click('#btnClearTarget');
+
+  // drop a pin by tapping the plan
+  const mapBox = await page.locator('#map').boundingBox();
+  await page.click('#btnPinMode');
+  await page.mouse.click(mapBox.x + mapBox.width * 0.35, mapBox.y + mapBox.height * 0.45);
+  await page.waitForTimeout(200);
+  ok('tapping the map drops a pin', (await page.textContent('#logCount')) === '3', await page.textContent('#logCount'));
+  const tapped = await page.evaluate(() => window.stationDebug.state.marks.at(-1));
+  ok('a tapped pin is recorded as coming from the map, not a fix', tapped.fix === 'MAP' && tapped.source === 'map',
+     JSON.stringify({ fix: tapped.fix, source: tapped.source }));
+  ok('a tapped pin still gets a station and offset', tapped.station != null && tapped.offset != null,
+     JSON.stringify({ s: tapped.station, o: tapped.offset }));
+  await page.click('#btnPinMode');
+
+  /* ---------------- UI: measuring ---------------- */
+  console.log('\n— UI: measuring —');
+  await page.click('.tab[data-tab="measure"]');
+  await page.click('#btnStartMeasure');
+  ok('measuring shows a strip on the map tab', await page.isVisible('#measureStrip'));
+
+  // four taps round a rectangle on screen
+  const corners = [[0.30, 0.35], [0.70, 0.35], [0.70, 0.62], [0.30, 0.62]];
+  await page.click('.tab[data-tab="measure"]');
+  await page.click('#measureSeg .seg-btn[data-mode="area"]');
+  await page.click('.tab[data-tab="track"]');
+  for (const [fx, fy] of corners) {
+    await page.mouse.click(mapBox.x + mapBox.width * fx, mapBox.y + mapBox.height * fy);
+    await page.waitForTimeout(90);
+  }
+  const mpts = await page.evaluate(() => window.stationDebug.state.measure.points.map(p => ({ x: p.x, y: p.y, station: p.station })));
+  ok('four taps make four vertices', mpts.length === 4, String(mpts.length));
+  ok('every measured vertex gets a station', mpts.every(p => p.station != null));
+
+  // independent shoelace on the recorded points
+  const shoelace = pts => Math.abs(pts.reduce((sum, p, i) => {
+    const q = pts[(i + 1) % pts.length];
+    return sum + p.x * q.y - q.x * p.y;
+  }, 0)) / 2;
+  const expectM2 = shoelace(mpts);
+  const shown = await page.textContent('#stripValue');
+  const shownFt2 = Number(shown.replace(/[^0-9.]/g, ''));
+  const usFoot = 1200 / 3937;
+  const expectFt2 = expectM2 / (usFoot * usFoot);
+  ok(`area matches an independent shoelace (${shown} vs ${expectFt2.toFixed(0)} ft²)`,
+     Math.abs(shownFt2 - expectFt2) / expectFt2 < 0.005, `${shownFt2} vs ${expectFt2}`);
+
+  await page.click('.tab[data-tab="measure"]');
+  const areaSub = await page.textContent('#measureSub');
+  ok('acres are shown alongside square feet', /acres/.test(areaSub), areaSub);
+  ok('perimeter is reported', /perimeter/.test(areaSub), areaSub);
+  ok('the vertex list has a row per point', (await page.locator('#vertexList .logrow').count()) === 4);
+
+  // distance mode through several points
+  await page.click('#measureSeg .seg-btn[data-mode="distance"]');
+  const dist = await page.textContent('#mTotal');
+  ok(`the same points give a distance total (${dist})`, /\d+\.\d\d ft/.test(dist), dist);
+  await page.click('#btnUndoPoint');
+  ok('undo drops the last point', (await page.locator('#vertexList .logrow').count()) === 3);
+
+  await page.fill('#measureName', 'North pad');
+  await page.click('#btnSaveMeasure');
+  await page.waitForTimeout(150);
+  ok('a saved measurement is listed', (await page.textContent('#savedCount')) === '1', await page.textContent('#savedCount'));
+  ok('the saved measurement keeps its name', (await page.textContent('#savedList')).includes('North pad'),
+     await page.textContent('#savedList'));
+  ok('saving clears the working measurement', (await page.locator('#vertexList .logrow').count()) === 0);
+  await page.screenshot({ path: path.join(__dirname, 'shot-measure.png'), fullPage: true });
 
   /* ---------------- UI: external receiver ---------------- */
   console.log('\n— UI: RTK receiver ---');
@@ -306,7 +456,7 @@ const near = (name, got, want, tol) =>
 
   await page.fill('#markNote', 'hub & tack');
   await page.click('#btnMark');
-  ok('rover mark logged', (await page.textContent('#logCount')) === '2');
+  ok('rover mark logged', (await page.textContent('#logCount')) === '4');
   await page.click('.tab[data-tab="log"]');
   const logText = await page.textContent('#logList');
   ok('mark records the fix quality', logText.includes('RTK FIX'), logText.slice(0, 160));
@@ -387,7 +537,8 @@ const near = (name, got, want, tol) =>
   await page.waitForTimeout(500);
   ok('project restored after reload', (await page.textContent('#projectName')).includes('MAIN ST'),
      await page.textContent('#projectName'));
-  ok('marks restored after reload', (await page.textContent('#logCount')) === '2');
+  ok('pins restored after reload', (await page.textContent('#logCount')) === '4');
+  ok('saved measurements restored after reload', (await page.textContent('#savedCount')) === '1');
 
   await page.click('#chkDemo');
   await page.waitForTimeout(1200);

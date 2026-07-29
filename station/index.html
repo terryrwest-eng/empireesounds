@@ -28,9 +28,10 @@
 
   <nav class="tabs" role="tablist">
     <button role="tab" class="tab is-on" data-tab="track" aria-selected="true">Track</button>
+    <button role="tab" class="tab" data-tab="measure" aria-selected="false">Measure</button>
+    <button role="tab" class="tab" data-tab="log" aria-selected="false">Pins <span class="count" id="logCount">0</span></button>
     <button role="tab" class="tab" data-tab="rover" aria-selected="false">Rover</button>
-    <button role="tab" class="tab" data-tab="log" aria-selected="false">Log <span class="count" id="logCount">0</span></button>
-    <button role="tab" class="tab" data-tab="project" aria-selected="false">Project</button>
+    <button role="tab" class="tab" data-tab="project" aria-selected="false">Setup</button>
   </nav>
 </div>
 
@@ -65,10 +66,24 @@
   <div class="mapwrap">
     <canvas id="map"></canvas>
     <div class="mapbtns">
+      <button type="button" id="btnPinMode" class="mini">Pin</button>
       <button type="button" id="btnFollow" class="mini">Follow</button>
       <button type="button" id="btnFit" class="mini">Fit</button>
       <button type="button" id="btnZoomIn" class="mini" aria-label="Zoom in">+</button>
       <button type="button" id="btnZoomOut" class="mini" aria-label="Zoom out">−</button>
+    </div>
+  </div>
+
+  <div class="measure-strip" id="measureStrip" hidden>
+    <div class="measure-strip-read">
+      <span class="measure-strip-k" id="stripLabel">Distance</span>
+      <span class="measure-strip-v" id="stripValue">—</span>
+    </div>
+    <div class="row-gap">
+      <button type="button" class="btn primary" id="btnStripAdd">+ Point</button>
+      <button type="button" class="btn" id="btnStripUndo">Undo</button>
+      <button type="button" class="btn ghost" id="btnStripSave">Save</button>
+      <button type="button" class="btn ghost danger" id="btnStripStop">Stop</button>
     </div>
   </div>
 
@@ -83,8 +98,8 @@
 
   <div class="actions">
     <button type="button" class="btn primary" id="btnGps">Start GPS</button>
-    <button type="button" class="btn" id="btnMark">Mark this station</button>
-    <input id="markNote" type="text" placeholder="note (optional)" autocomplete="off">
+    <button type="button" class="btn" id="btnMark">Drop pin here</button>
+    <input id="markNote" type="text" placeholder="pin label (optional)" autocomplete="off">
     <label class="check"><input type="checkbox" id="chkSmooth" checked> Smooth GPS</label>
     <label class="check"><input type="checkbox" id="chkDemo"> Demo walk</label>
   </div>
@@ -183,17 +198,62 @@
 
 </section>
 
+<!-- ─────────────── MEASURE ─────────────── -->
+<section id="tab-measure" class="panel">
+
+  <div class="seg" id="measureSeg">
+    <button type="button" class="seg-btn is-on" data-mode="distance">Distance</button>
+    <button type="button" class="seg-btn" data-mode="area">Area</button>
+  </div>
+
+  <div class="measure-out" id="measureOut">
+    <div class="measure-big" id="measureBig">—</div>
+    <div class="measure-sub" id="measureSub">Add points to start measuring</div>
+  </div>
+
+  <div class="statgrid" id="measureStats" hidden>
+    <div class="stat"><span class="stat-k" id="kA">Total</span><span class="stat-v" id="mTotal">—</span></div>
+    <div class="stat"><span class="stat-k" id="kB">Straight line</span><span class="stat-v" id="mStraight">—</span></div>
+    <div class="stat"><span class="stat-k">Last leg</span><span class="stat-v" id="mLast">—</span></div>
+    <div class="stat"><span class="stat-k">Grade</span><span class="stat-v" id="mGrade">—</span></div>
+    <div class="stat"><span class="stat-k">Rise / fall</span><span class="stat-v" id="mRise">—</span></div>
+    <div class="stat"><span class="stat-k">Points</span><span class="stat-v" id="mCount">0</span></div>
+  </div>
+
+  <label class="spaced">Name (for saving)
+    <input id="measureName" type="text" placeholder="North pad" autocomplete="off">
+  </label>
+  <div class="row-gap spaced">
+    <button type="button" class="btn primary" id="btnStartMeasure">Start measuring</button>
+    <button type="button" class="btn" id="btnAddPoint">Add point here</button>
+    <button type="button" class="btn" id="btnUndoPoint">Undo</button>
+    <button type="button" class="btn ghost" id="btnClearMeasure">Clear</button>
+    <button type="button" class="btn ghost" id="btnSaveMeasure">Save</button>
+  </div>
+  <p class="muted spaced">While measuring, tap the map on the Track tab to add a point anywhere, or stand on it and use <b>+ Point</b>. The last leg follows you as you walk.</p>
+
+  <div id="vertexList" class="loglist"></div>
+
+  <h2>Saved measurements <span class="count" id="savedCount">0</span></h2>
+  <div id="savedList" class="loglist"><p class="muted">Nothing saved yet.</p></div>
+  <div class="row-gap">
+    <button type="button" class="btn ghost" id="btnExportMeasure">Export CSV</button>
+    <button type="button" class="btn ghost" id="btnExportMeasureGeo">Export GeoJSON</button>
+  </div>
+
+</section>
+
 <!-- ─────────────── LOG ─────────────── -->
 <section id="tab-log" class="panel">
   <div class="row-between">
-    <h2>Marks</h2>
+    <h2>Pins &amp; marks</h2>
     <div class="row-gap">
       <button type="button" class="btn ghost" id="btnExportCsv">CSV</button>
       <button type="button" class="btn ghost" id="btnExportGeo">GeoJSON</button>
       <button type="button" class="btn ghost danger" id="btnClearLog">Clear</button>
     </div>
   </div>
-  <div id="logList" class="loglist"><p class="muted">Nothing marked yet. Hit <b>Mark this station</b> on the Track tab.</p></div>
+  <div id="logList" class="loglist"><p class="muted">No pins yet. Hit <b>Drop pin here</b> on the Track tab, or turn on <b>Pin</b> and tap the map.</p></div>
 </section>
 
 <!-- ─────────────── PROJECT ─────────────── -->
@@ -217,7 +277,8 @@
     <div class="grid2">
       <label>Units
         <select id="selUnit">
-          <option value="ft">Feet</option>
+          <option value="usfoot">Feet — US survey</option>
+          <option value="foot">Feet — international</option>
           <option value="m">Metres</option>
         </select>
       </label>

@@ -2,6 +2,7 @@
 // where you are, and the tie back to the centreline.
 
 import { formatStation } from './alignment.js';
+import { segments, centroid, area as polygonArea, formatArea } from './measure.js';
 
 export class PlanView {
   constructor(canvas) {
@@ -13,13 +14,17 @@ export class PlanView {
     this.alignment = null;
     this.drawPts = [];
     this.marks = [];
+    this.selectedMark = null;
     this.pois = [];
     this.fix = null;         // {x,y,acc,heading}
     this.snap = null;        // [x,y]
-    this.target = null;      // {x,y,station}
+    this.target = null;      // {x,y,station,label}
+    this.measure = null;     // {mode, points:[{x,y}], live:{x,y}}
     this.units = { label: 'm', perMetre: 1, interval: 100 };
+    this.onTap = null;       // (worldX, worldY, hitPinId) => void
     this._pointers = new Map();
     this._pinch = null;
+    this._tapStart = null;
     this._bind();
     this._resize();
     new ResizeObserver(() => { this._resize(); this.draw(); }).observe(canvas);
@@ -83,6 +88,8 @@ export class PlanView {
     c.addEventListener('pointerdown', e => {
       c.setPointerCapture(e.pointerId);
       this._pointers.set(e.pointerId, [e.offsetX, e.offsetY]);
+      if (this._pointers.size === 1) this._tapStart = [e.offsetX, e.offsetY, Date.now()];
+      else this._tapStart = null;
       if (this._pointers.size === 2) {
         const [a, b] = [...this._pointers.values()];
         this._pinch = Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -100,13 +107,28 @@ export class PlanView {
         return;
       }
       if (this._pointers.size === 1) {
+        // A drag is a pan, not a tap — but let a shaky thumb still count as one.
+        if (this._tapStart && Math.hypot(e.offsetX - this._tapStart[0], e.offsetY - this._tapStart[1]) > 8) {
+          this._tapStart = null;
+        }
         this.cx -= (e.offsetX - prev[0]) / this.scale;
         this.cy += (e.offsetY - prev[1]) / this.scale;
         this.follow = false;
         this.draw();
       }
     });
-    const up = e => { this._pointers.delete(e.pointerId); if (this._pointers.size < 2) this._pinch = null; };
+    const up = e => {
+      if (this._tapStart && this._pointers.size === 1 && this.onTap) {
+        const [sx, sy, t] = this._tapStart;
+        if (Date.now() - t < 700) {
+          const [wx, wy] = this.toWorld(sx, sy);
+          this.onTap(wx, wy, this.pickPin(sx, sy));
+        }
+      }
+      this._tapStart = null;
+      this._pointers.delete(e.pointerId);
+      if (this._pointers.size < 2) this._pinch = null;
+    };
     c.addEventListener('pointerup', up);
     c.addEventListener('pointercancel', up);
     c.addEventListener('wheel', e => {
@@ -115,9 +137,43 @@ export class PlanView {
     }, { passive: false });
   }
 
+  /**
+   * Labels are placed first-come, first-served: anything that would land on top
+   * of text already drawn is dropped instead. A map with two numbers written
+   * over each other is worse than a map with one.
+   */
+  _claimLabel(cx, cy, w, h) {
+    const box = { x: cx - w / 2, y: cy - h / 2, w, h };
+    for (const b of this._labels) {
+      if (box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y) return null;
+    }
+    this._labels.push(box);
+    return box;
+  }
+
+  /** Try the preferred spot, then a few nearby, before giving up on a label. */
+  _claimLabelNear(cx, cy, w, h, offsets) {
+    for (const [dx, dy] of offsets) {
+      const box = this._claimLabel(cx + dx, cy + dy, w, h);
+      if (box) return box;
+    }
+    return null;
+  }
+
   draw() {
     const ctx = this.ctx;
     const { width, height } = this._size();
+    this._labels = [];
+    // Markers are not text, but text must not land on them either.
+    if (this.fix) {
+      const [fx, fy] = this.toScreen(this.fix.x, this.fix.y);
+      this._labels.push({ x: fx - 16, y: fy - 16, w: 32, h: 32 });
+    }
+    for (const m of this.marks) {
+      if (m.x == null) continue;
+      const [mx, my] = this.toScreen(m.x, m.y);
+      this._labels.push({ x: mx - 8, y: my - 26, w: 16, h: 26 });
+    }
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#171310';
     ctx.fillRect(0, 0, width, height);
@@ -130,6 +186,7 @@ export class PlanView {
       this._ticks(ctx);
     }
     this._pois(ctx);
+    this._measure(ctx);
     this._marks(ctx);
     this._targetMark(ctx);
     this._tie(ctx);
@@ -226,8 +283,12 @@ export class PlanView {
       ctx.lineTo(sx + nx * len, sy - ny * len);
       ctx.stroke();
       if (labels) {
-        ctx.fillStyle = 'rgba(241,234,223,.55)';
-        ctx.fillText(formatStation(sta, interval, 0), sx + 8, sy - 8);
+        const text = formatStation(sta, interval, 0);
+        const w = ctx.measureText(text).width;
+        if (this._claimLabel(sx + 8 + w / 2, sy - 12, w + 4, 13)) {
+          ctx.fillStyle = 'rgba(241,234,223,.55)';
+          ctx.fillText(text, sx + 8, sy - 8);
+        }
       }
     }
   }
@@ -240,16 +301,165 @@ export class PlanView {
     }
   }
 
-  _marks(ctx) {
-    ctx.font = '500 10px ui-monospace,Menlo,monospace';
-    for (const m of this.marks) {
-      if (m.x == null) continue;
+  /** Which pin is under this screen point, if any. */
+  pickPin(px, py, slop = 20) {
+    let best = null;
+    this.marks.forEach((m, i) => {
+      if (m.x == null) return;
       const [sx, sy] = this.toScreen(m.x, m.y);
-      ctx.fillStyle = '#F1EADF';
+      // The tip of the pin is at the point; the head sits above it.
+      const d = Math.hypot(px - sx, py - (sy - 9));
+      if (d <= slop && (!best || d < best.d)) best = { d, index: i, mark: m };
+    });
+    return best ? best.index : null;
+  }
+
+  _marks(ctx) {
+    ctx.font = '600 10px ui-monospace,Menlo,monospace';
+    ctx.textAlign = 'center';
+    this.marks.forEach((m, i) => {
+      if (m.x == null) return;
+      const [sx, sy] = this.toScreen(m.x, m.y);
+      const selected = i === this.selectedMark;
+      // A teardrop pin: the point is the position, the head carries the label.
       ctx.beginPath();
-      ctx.moveTo(sx, sy - 5); ctx.lineTo(sx + 5, sy); ctx.lineTo(sx, sy + 5); ctx.lineTo(sx - 5, sy);
-      ctx.closePath(); ctx.fill();
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo(sx - 7, sy - 8, sx - 6, sy - 13);
+      ctx.arc(sx, sy - 13, 6, Math.PI, 0);
+      ctx.quadraticCurveTo(sx + 7, sy - 8, sx, sy);
+      ctx.closePath();
+      ctx.fillStyle = selected ? '#7FE0A8' : '#F1EADF';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(11,10,9,.85)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#14100E';
+      ctx.beginPath();
+      ctx.arc(sx, sy - 13, 2.4, 0, 7);
+      ctx.fill();
+
+      const label = m.label || m.note;
+      if (label && this.scale > 0.05) {
+        const w = ctx.measureText(label).width + 8;
+        if (this._claimLabel(sx, sy - 34, w, 14)) {
+          ctx.fillStyle = 'rgba(20,16,14,.75)';
+          ctx.fillRect(sx - w / 2, sy - 40, w, 13);
+          ctx.fillStyle = '#F1EADF';
+          ctx.fillText(label, sx, sy - 30);
+        }
+      }
+    });
+    ctx.textAlign = 'left';
+  }
+
+  /** The live tape: legs, running lengths, and the figure being closed. */
+  _measure(ctx) {
+    const m = this.measure;
+    if (!m || !m.points.length) return;
+    const pts = m.points.slice();
+    const live = m.live ? { x: m.live.x, y: m.live.y } : null;
+    // The figure is the placed points. The live leg is drawn, but it is not part
+    // of the shape, so what is on screen is what gets saved.
+    const chain = pts;
+    const closing = m.mode === 'area' && chain.length > 2;
+
+    // fill first, so the lines sit on top of it
+    if (closing) {
+      ctx.beginPath();
+      chain.forEach((p, i) => {
+        const [sx, sy] = this.toScreen(p.x, p.y);
+        i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+      });
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(127,224,168,.14)';
+      ctx.fill();
     }
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#7FE0A8';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    chain.forEach((p, i) => {
+      const [sx, sy] = this.toScreen(p.x, p.y);
+      i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+    });
+    if (closing) ctx.closePath();
+    ctx.stroke();
+
+    // the leg being dragged out is dashed, so it reads as not-yet-placed
+    if (live && pts.length) {
+      const a = this.toScreen(pts[pts.length - 1].x, pts[pts.length - 1].y);
+      const b = this.toScreen(live.x, live.y);
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = 'rgba(127,224,168,.75)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Reserve the headline number first — it outranks every leg label.
+    let areaLabel = null;
+    if (closing) {
+      const a = polygonArea(chain);
+      const c = centroid(chain);
+      if (a > 0 && c) {
+        const [cx, cy] = this.toScreen(c.x, c.y);
+        const text = formatArea(a, this.units.label === 'ft' ? 'ft' : 'm');
+        ctx.font = '600 12px ui-monospace,Menlo,monospace';
+        const w = Math.max(ctx.measureText(text.primary).width, ctx.measureText(text.secondary).width) + 14;
+        const box = this._claimLabelNear(cx, cy, w, 34,
+          [[0, 0], [0, 44], [0, -44], [0, 80], [0, -80], [w * 0.6, 0], [-w * 0.6, 0]]);
+        if (box) areaLabel = { box, text };
+      }
+    }
+
+    ctx.font = '600 10px ui-monospace,Menlo,monospace';
+    ctx.textAlign = 'center';
+    const legs = segments(closing ? [...chain, chain[0]] : chain);
+    legs.forEach(leg => {
+      const a = chain[leg.from], b = chain[leg.to] || chain[0];
+      const [ax, ay] = this.toScreen(a.x, a.y);
+      const [bx, by] = this.toScreen(b.x, b.y);
+      if (Math.hypot(bx - ax, by - ay) < 44) return; // no room for a label
+      const text = `${(leg.horizontal * this.units.perMetre).toFixed(2)} ${this.units.label}`;
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      const w = ctx.measureText(text).width + 8;
+      if (!this._claimLabel(mx, my, w, 15)) return;
+      ctx.fillStyle = 'rgba(20,16,14,.8)';
+      ctx.fillRect(mx - w / 2, my - 7, w, 14);
+      ctx.fillStyle = '#7FE0A8';
+      ctx.fillText(text, mx, my + 3.5);
+    });
+
+    // vertices, numbered so the results list can be read against the map
+    pts.forEach((p, i) => {
+      const [sx, sy] = this.toScreen(p.x, p.y);
+      ctx.fillStyle = '#0B0A09';
+      ctx.strokeStyle = '#7FE0A8';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#7FE0A8';
+      ctx.font = '600 9px ui-monospace,Menlo,monospace';
+      ctx.fillText(String(i + 1), sx, sy - 9);
+    });
+
+    if (areaLabel) {
+      const { box, text } = areaLabel;
+      const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+      ctx.fillStyle = 'rgba(20,16,14,.88)';
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.strokeStyle = 'rgba(127,224,168,.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+      ctx.font = '600 12px ui-monospace,Menlo,monospace';
+      ctx.fillStyle = '#7FE0A8';
+      ctx.fillText(text.primary, cx, cy - 1);
+      ctx.font = '500 10px ui-monospace,Menlo,monospace';
+      ctx.fillStyle = 'rgba(241,234,223,.75)';
+      ctx.fillText(text.secondary, cx, cy + 12);
+    }
+    ctx.textAlign = 'left';
   }
 
   _targetMark(ctx) {

@@ -140,6 +140,57 @@ exactly why it is done against control you can stand on rather than by naming a
 projection. Occupy two points you trust, and check the RMS residual before
 believing anything.
 
+## Units
+
+**US survey feet by default**, because that is what US plans are on. The setting
+offers US survey, international, or metres, and the difference is not academic:
+the two feet differ by 2 ppm — about 0.01 ft in a mile — and the acre is defined
+from whichever foot is in use, so an acre is 4046.8726 m² in US survey feet and
+4046.8564 m² in international. Everything downstream, including area, is derived
+from the one setting.
+
+A grid file that declares its own unit overrides the setting. A LandXML that says
+`USSurveyFoot` is a statement of fact, not a preference, and the Setup tab names
+the foot in force so it is never a guess. Stationing on a grid file is measured
+in the file's own units along the file's own geometry, so it matches the plan
+regardless.
+
+## Pins
+
+Drop a pin where you are standing, or turn on **Pin** and tap the plan to place
+one anywhere. Either way, if an alignment is loaded the pin records **its station
+and offset automatically** — a hydrant is not at "33.812345, -117.228456", it is
+at 14+22.50, 18.3 ft RT, and that is what goes in the export.
+
+A pin taken standing on it keeps the fix quality, satellites, σ and corrections
+age that earned it. A pin tapped on the map is recorded as `MAP`, because nobody
+stood there and the record should not pretend otherwise.
+
+Tap **➤** on any pin to navigate to it: straight-line distance and bearing,
+updating as you walk, with the pin drawn on the plan.
+
+## Measuring
+
+**Distance** through as many points as you like: running total, straight line
+first-to-last, the length of the last leg, and — when the points have heights —
+rise, fall and grade as both a percentage and the ratio a slope stake is called
+in (`+6.00% · 16.7:1`).
+
+**Area** from three or more points: square feet with acres alongside, or square
+metres with hectares, plus the perimeter. The figure is drawn and filled on the
+plan with every leg dimensioned and the area written at its centroid. If the
+outline crosses itself the app says so, because the shoelace area of a bowtie is
+not the number anyone wants.
+
+Points come from wherever suits: **+ Point** where you are standing, or tap the
+plan. The leg from the last point follows you as you walk, but it is drawn only —
+**the number quoted is always the points you placed**, so what is on screen is
+what gets saved. Every vertex carries its own station and offset.
+
+Measurements are named, saved, reloaded onto the map, and exported to CSV (one
+row per vertex, with leg lengths and a running total) or GeoJSON (a LineString
+or a Polygon).
+
 ## In the field
 
 - **Station and offset**, large, pinned to the top of the screen. Offsets are
@@ -161,8 +212,9 @@ station you are at, not enough to set one. On an RTK fix from a real receiver
 the readout is centimetre-level, and the accuracy shown is the receiver's own,
 not a guess.
 
-This is a stationing tool, not a replacement for SurPad: there is no coordinate
-system library, no point staking, no codes and linework, no raw data file.
+This is a stationing, pin and measuring tool. It deliberately does not stake
+points, and there is no coordinate system library, no feature coding or linework,
+and no raw data file.
 
 ## Layout
 
@@ -179,6 +231,7 @@ js/dxf.js       DXF entities
 js/nmea.js      NMEA reader — fix quality, accuracy, corrections age
 js/rover.js     WebUSB / Web Serial / Web Bluetooth links to a receiver
 js/ntrip.js     NTRIP client, sourcetable, RTCM framing
+js/measure.js   distance, area, grade, and the unit formatting for both feet
 js/native.js    bridge to the Android shell, when running inside it
 js/map.js       canvas plan view
 js/app.js       wiring, GPS, georeferencing UI, log

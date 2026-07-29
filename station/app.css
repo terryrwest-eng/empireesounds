@@ -211,6 +211,29 @@ label input,label select{margin-top:.3rem}
 .logrow-note{font-size:.86rem;margin-top:.2rem}
 .icon-btn{border:0;background:transparent;color:var(--ash);font-size:1.1rem;cursor:pointer;padding:.3rem .4rem;min-height:44px}
 
+/* ---------- measure ---------- */
+
+.measure-strip{
+  display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;
+  margin:.6rem 0;padding:.6rem .75rem;border-radius:var(--r);
+  background:rgba(127,224,168,.08);border:1px solid rgba(127,224,168,.35);
+}
+.measure-strip-read{display:flex;flex-direction:column;gap:.1rem;min-width:0}
+.measure-strip-k{font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ash)}
+.measure-strip-v{font:600 1.25rem/1.1 var(--mono);color:var(--good);font-variant-numeric:tabular-nums}
+.measure-strip .btn{padding:.6rem .7rem;font-size:.85rem;min-height:40px}
+
+.measure-out{
+  margin:.9rem 0 .2rem;padding:.9rem 1rem;border-radius:var(--r);
+  background:linear-gradient(180deg,var(--panel-hi),var(--panel));border:var(--hair);text-align:center;
+}
+.measure-big{
+  font:600 clamp(1.9rem,9vw,2.9rem)/1.05 var(--mono);color:var(--good);
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em;
+}
+.measure-sub{margin-top:.35rem;font-size:.85rem;color:var(--ash)}
+.logrow.is-on{border-color:var(--good);background:var(--panel-hi)}
+
 .statgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;margin:.7rem 0}
 .stat{background:var(--panel);border:var(--hair);border-radius:10px;padding:.5rem .55rem;min-width:0}
 .stat-wide{grid-column:1/-1}
