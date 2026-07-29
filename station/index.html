@@ -44,7 +44,7 @@
   <div class="readout-wrap">
     <div class="readout" id="readout">
       <div class="readout-top">
-        <span class="readout-label">STATION</span>
+        <span class="readout-label" id="readoutLabel">STATION</span>
         <span class="fixbadge" id="fixBadge">GPS OFF</span>
       </div>
       <div class="readout-sta" id="staBig">—</div>
@@ -99,6 +99,7 @@
   <div class="actions">
     <button type="button" class="btn primary" id="btnGps">Start GPS</button>
     <button type="button" class="btn" id="btnMark">Drop pin here</button>
+    <button type="button" class="btn" id="btnPinPhoto" aria-label="Drop a pin and take a photo">Pin + photo</button>
     <input id="markNote" type="text" placeholder="pin label (optional)" autocomplete="off">
     <label class="check"><input type="checkbox" id="chkSmooth" checked> Smooth GPS</label>
     <label class="check"><input type="checkbox" id="chkDemo"> Demo walk</label>
@@ -250,9 +251,11 @@
     <div class="row-gap">
       <button type="button" class="btn ghost" id="btnExportCsv">CSV</button>
       <button type="button" class="btn ghost" id="btnExportGeo">GeoJSON</button>
+      <button type="button" class="btn ghost" id="btnExportPhotos" disabled>Photos <span class="count" id="photoCount">0</span></button>
       <button type="button" class="btn ghost danger" id="btnClearLog">Clear</button>
     </div>
   </div>
+  <p class="muted">Photos are stored on the device and export as a zip with a csv of where each one was taken.</p>
   <div id="logList" class="loglist"><p class="muted">No pins yet. Hit <b>Drop pin here</b> on the Track tab, or turn on <b>Pin</b> and tap the map.</p></div>
 </section>
 
@@ -268,8 +271,16 @@
   <div id="fileMsg" class="msg" hidden></div>
 
   <div id="linePick" hidden>
-    <h3>Which line is the centreline?</h3>
+    <h3>Other lines in this file</h3>
+    <p class="muted">Tap to add one to the project. Several pipelines on one job each keep their own stationing.</p>
     <div id="lineList" class="linelist"></div>
+  </div>
+
+  <div id="alignBlock" hidden>
+    <h2>Alignments in this project <span class="count" id="alignCount">0</span></h2>
+    <p class="muted">The selected one drives the big readout. Pins and measured points record their station and offset on <b>every</b> alignment here.</p>
+    <div id="alignList" class="linelist"></div>
+    <label class="check"><input type="checkbox" id="chkAutoNearest"> Follow whichever line I am closest to</label>
   </div>
 
   <div id="setupBlock" hidden>
@@ -355,7 +366,10 @@
 
   <div id="dangerBlock" hidden>
     <h2>Project</h2>
-    <div class="row-gap">
+    <label>Project name
+      <input id="inpProjectName" type="text" placeholder="Ramona Expressway phase 2" autocomplete="off">
+    </label>
+    <div class="row-gap spaced">
       <button type="button" class="btn ghost" id="btnSave">Save now</button>
       <button type="button" class="btn ghost danger" id="btnReset">Clear project</button>
     </div>
@@ -373,6 +387,15 @@
 </section>
 
 </main>
+
+<div class="overlay" id="photoOverlay" hidden>
+  <img id="photoImg" alt="Site photo">
+  <div class="overlay-bar">
+    <span class="overlay-caption" id="photoCaption"></span>
+    <button type="button" class="btn ghost danger" id="btnPhotoDelete">Delete</button>
+    <button type="button" class="btn" id="btnPhotoClose">Close</button>
+  </div>
+</div>
 
 <script type="module" src="js/app.js"></script>
 </body>

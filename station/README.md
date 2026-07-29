@@ -155,6 +155,41 @@ the foot in force so it is never a guess. Stationing on a grid file is measured
 in the file's own units along the file's own geometry, so it matches the plan
 regardless.
 
+## Several alignments in one project
+
+A pipeline job runs sewer, storm and water down the same trench, each with its
+own stationing, and the same 6 ft of ground is 12+40 on one and 52+38 on
+another. So a project holds **as many alignments as you like**:
+
+- A LandXML with several `<Alignment>` elements adds all of them at once.
+- Any other file adds a line at a time — load a second or third file and they
+  join the same project.
+- Each keeps its own start station, station equations and units.
+- One is *active*: it drives the big readout and the station ticks on the plan.
+  The rest draw dashed and labelled, so you can see the whole trench.
+- **Follow whichever line I am closest to** hands the readout over as you cross
+  from one to another. It only switches on a clear winner, so it does not
+  flicker when you are standing between them.
+
+**Every pin and every measured point records its station and offset on all of
+them.** One pin on a manhole reads `SAN SEWER 12+50.00 10.00 ft RT` *and*
+`STORM DRAIN 52+50.00 15.00 ft LT`, and the export has both. That is the part
+worth having: you rarely know at the time which line the question will be about.
+
+All the alignments in a project share one georeference, so control set on one
+line ties down the rest.
+
+## How stationing is worked out
+
+Your position is projected **perpendicularly onto the centreline**: the station
+is the distance along the line to that foot, measured through every curve and
+spiral as drawn, and the offset is the perpendicular distance from it — **+ right,
+− left, looking up-station**. That is the same construction a plan uses, which is
+why the numbers match the plan rather than approximating it.
+
+Past either end of the line, the readout holds at the first or last station and
+says how far beyond you are, rather than inventing stations that do not exist.
+
 ## Pins
 
 Drop a pin where you are standing, or turn on **Pin** and tap the plan to place
@@ -168,6 +203,16 @@ stood there and the record should not pretend otherwise.
 
 Tap **➤** on any pin to navigate to it: straight-line distance and bearing,
 updating as you walk, with the pin drawn on the plan.
+
+**Photos.** Attach as many as you like to a pin, from the camera or the gallery.
+They are downscaled to 1600 px and kept in IndexedDB on the device — a 12 MP
+photo of a valve box is 4 MB of detail nobody needs. Thumbnails sit on the pin,
+tap to view full screen. **Photos** exports the lot as a zip with a csv saying
+which pin, station and offset each one belongs to.
+
+While measuring, tapping a pin takes the measurement **from the pin itself**
+rather than from a thumb-width away, so you can come back weeks later and
+measure between two pins you set on different days.
 
 ## Measuring
 
@@ -232,6 +277,8 @@ js/nmea.js      NMEA reader — fix quality, accuracy, corrections age
 js/rover.js     WebUSB / Web Serial / Web Bluetooth links to a receiver
 js/ntrip.js     NTRIP client, sourcetable, RTCM framing
 js/measure.js   distance, area, grade, and the unit formatting for both feet
+js/photos.js    photo capture, downscaling and IndexedDB storage
+js/zip.js       store-only zip writer, for the photo export
 js/native.js    bridge to the Android shell, when running inside it
 js/map.js       canvas plan view
 js/app.js       wiring, GPS, georeferencing UI, log

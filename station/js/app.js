@@ -9,6 +9,8 @@ import { NmeaReader, buildGGA } from './nmea.js';
 import { NtripClient, casterDistanceKm } from './ntrip.js';
 import { isNative, NativeLink, NativeNtrip, nativeInfo } from './native.js';
 import { summarise, formatDistance, formatArea, formatGrade, setFootMetres } from './measure.js';
+import { savePhoto, photosFor, allPhotos, deletePhoto, deletePhotosFor, urlFor, countPhotos } from './photos.js';
+import { makeZip, blobBytes } from './zip.js';
 
 const $ = id => document.getElementById(id);
 const STORE_KEY = 'station.project.v1';
@@ -21,9 +23,9 @@ const UNIT_M = { meter: 1, foot: M_PER_INTL_FT, usfoot: M_PER_US_FT };
  * Which foot is in force. A grid file states its own — a LandXML that says
  * USSurveyFoot is not negotiable — otherwise it is the user's setting.
  */
-function footMetres() {
-  if (state.file && state.file.crs === 'grid' && state.file.linearUnit && state.file.linearUnit !== 'meter') {
-    return UNIT_M[state.file.linearUnit];
+function footMetres(def = activeDef()) {
+  if (def && def.crs === 'grid' && def.linearUnit && def.linearUnit !== 'meter') {
+    return UNIT_M[def.linearUnit];
   }
   return UNIT_M[state.foot] ?? M_PER_US_FT;
 }
@@ -40,14 +42,17 @@ function footName() {
 }
 
 const state = {
-  file: null,          // parse result
-  lineId: null,
+  // A project is a set of alignments that share one georeference. A pipeline
+  // job runs sewer, storm and water down the same trench with three different
+  // stationings, and a pin has to be able to say where it is on each of them.
+  projectName: '',
+  alignments: [],      // [{id, name, fileName, source, crs, linearUnit, coords, points, staStart, equations}]
+  activeId: null,
+  autoNearest: false,  // let the closest alignment take the readout
   units: 'ft',         // display system for geographic files; forced by the file for grid files
   foot: 'usfoot',      // which foot: US survey (the default on US plans) or international
   interval: 100,
   decimals: 2,
-  staStart: 0,
-  equations: [],       // [{along (display units), ahead}]
   control: [],         // [{src:[e,n], lat, lon, label}]
   transform: null,
   frame: null,
@@ -76,76 +81,124 @@ let ctrlSrcMode = 'sta';
 
 /* ─────────────────────────── units ─────────────────────────── */
 
-function unitLabel() {
-  if (state.file && state.file.crs === 'grid') {
-    return (state.file.linearUnit || 'meter') === 'meter' ? 'm' : 'ft';
+/** The alignment the readout is following. */
+function activeDef() {
+  if (!state.alignments.length) return null;
+  return state.alignments.find(a => a.id === state.activeId) || state.alignments[0];
+}
+
+function unitLabel(def = activeDef()) {
+  if (def && def.crs === 'grid') {
+    return (def.linearUnit || 'meter') === 'meter' ? 'm' : 'ft';
   }
   return state.units;
 }
 function metresPerFileUnit() {
-  return UNIT_M[state.file?.linearUnit] ?? 1;
+  const def = state.alignments.find(a => a.crs === 'grid') || activeDef();
+  return UNIT_M[def?.linearUnit] ?? 1;
 }
 /** Keep the measuring module on the same foot as everything else. */
 function applyFootSetting() {
   setFootMetres(footMetres());
 }
 
-function unitsPerMetre() {
-  if (!state.file) return 1;
-  if (state.file.crs === 'grid') {
+function unitsPerMetre(def = activeDef()) {
+  if (!def) return 1;
+  if (def.crs === 'grid') {
     // Grid stationing is measured in the file's own units along the file's own
     // geometry, so derive it from the fitted scale rather than a nominal factor.
     return state.transform ? 1 / state.transform.scale : 1;
   }
-  return state.units === 'ft' ? 1 / footMetres() : 1;
+  return state.units === 'ft' ? 1 / footMetres(def) : 1;
 }
 
-/* ─────────────────────── build the alignment ─────────────────────── */
+/* ─────────────────────── building the alignments ─────────────────────── */
 
-function currentLine() {
-  if (!state.file) return null;
-  return state.file.lines.find(l => l.id === state.lineId) || state.file.lines[0] || null;
+const built = new Map();   // alignment id -> Alignment
+
+function currentLine() { return activeDef(); }
+
+/**
+ * One frame for the whole project. Every alignment lands in it, so a pin has a
+ * single position and a station on each line rather than a position per line.
+ */
+function ensureFrame() {
+  if (state.frame) return;
+  const geo = state.alignments.find(a => a.crs === 'geographic');
+  if (geo) {
+    const mid = geo.coords[Math.floor(geo.coords.length / 2)];
+    state.frame = new LocalFrame(mid[1], mid[0]);
+  }
+}
+
+function localXY(def) {
+  if (def.crs === 'geographic') {
+    ensureFrame();
+    if (!state.frame) return [];
+    return def.coords.map(([lon, lat]) => state.frame.toXY(lat, lon));
+  }
+  if (state.transform) return def.coords.map(([e, n]) => applySimilarity(state.transform, e, n));
+  // Not georeferenced yet — draw it in raw grid units so the plan and the
+  // stationing still work; GPS stays off until control goes in.
+  return def.coords.map(c => [c[0], c[1]]);
 }
 
 function build() {
-  const line = currentLine();
-  if (!line) { state.alignment = null; return; }
-  const upm = unitsPerMetre();
-  let xy, frame = null;
-
-  if (state.file.crs === 'geographic') {
-    const mid = line.coords[Math.floor(line.coords.length / 2)];
-    frame = new LocalFrame(mid[1], mid[0]);
-    xy = line.coords.map(([lon, lat]) => frame.toXY(lat, lon));
-  } else if (state.transform) {
-    frame = state.frame;
-    xy = line.coords.map(([e, n]) => applySimilarity(state.transform, e, n));
-  } else {
-    // Not georeferenced yet — draw it in raw grid units so the plan and the
-    // stationing still work; GPS stays disabled until control goes in.
-    xy = line.coords.map(c => [c[0], c[1]]);
+  ensureFrame();
+  built.clear();
+  for (const def of state.alignments) {
+    const upm = unitsPerMetre(def);
+    const xy = localXY(def);
+    if (xy.length < 2) continue;
+    built.set(def.id, new Alignment(simplify(xy, 0.0005), {
+      name: def.name,
+      staStart: def.staStart,
+      unitsPerMetre: upm,
+      equations: (def.equations || []).map(e => ({ dist: e.along / upm, ahead: e.ahead }))
+    }));
   }
+  if (!built.has(state.activeId)) state.activeId = state.alignments[0]?.id ?? null;
+  state.alignment = built.get(state.activeId) || null;
 
-  state.frame = frame;
   smoothed = null; // the filter's history belongs to the old frame
-  state.alignment = new Alignment(simplify(xy, 0.0005), {
-    name: line.name,
-    staStart: state.staStart,
-    unitsPerMetre: upm,
-    equations: state.equations.map(e => ({ dist: e.along / upm, ahead: e.ahead }))
-  });
-
-  view.setAlignment(state.alignment, { label: unitLabel(), perMetre: upm, interval: state.interval });
+  view.setAlignments(
+    state.alignments.map(d => ({ id: d.id, name: d.name, al: built.get(d.id) })).filter(a => a.al),
+    state.activeId,
+    { label: unitLabel(), perMetre: unitsPerMetre(), interval: state.interval }
+  );
   view.pois = pois();
   refreshMarkXY();
   renderAll();
 }
 
+/** Station and offset on every alignment in the project, nearest first. */
+function stationsAt(x, y) {
+  const out = [];
+  for (const def of state.alignments) {
+    const al = built.get(def.id);
+    if (!al) continue;
+    const proj = al.project(x, y);
+    if (!proj) continue;
+    out.push({
+      id: def.id,
+      name: def.name,
+      unit: unitLabel(def),
+      station: proj.station,
+      offset: proj.offsetDisplay,
+      distance: proj.distance,
+      onLine: proj.onLine
+    });
+  }
+  out.sort((a, b) => a.distance - b.distance);
+  return out;
+}
+
 function pois() {
-  if (!state.file) return [];
-  const pts = state.file.points || [];
+  const def = activeDef();
+  if (!def) return [];
+  const pts = def.points || [];
   if (!pts.length) return [];
-  if (state.file.crs === 'geographic') {
+  if (def.crs === 'geographic') {
     if (!state.frame) return [];
     return pts.slice(0, 2000).map(p => {
       const [x, y] = state.frame.toXY(p.y, p.x);
@@ -160,6 +213,38 @@ function pois() {
 
 /* ─────────────────────────── file loading ─────────────────────────── */
 
+let pendingParse = null;   // the last file read, so more lines can be added from it
+let nextAlignmentId = 1;
+
+function makeId() { return `al${Date.now().toString(36)}${nextAlignmentId++}`; }
+
+/** Turn a parsed line into an alignment in this project. */
+function addAlignment(parsed, line) {
+  const def = {
+    id: makeId(),
+    name: line.name,
+    fileName: parsed.fileName,
+    source: parsed.source,
+    crs: parsed.crs,
+    linearUnit: parsed.linearUnit,
+    coords: line.coords,
+    points: parsed.points || [],
+    staStart: line.staStart ?? 0,
+    equations: (line.equations || []).map(e => ({ along: e.dist, ahead: e.ahead }))
+  };
+  state.alignments.push(def);
+  if (!state.activeId) state.activeId = def.id;
+
+  // A grid file states its own unit, and that is not a preference.
+  if (parsed.crs === 'grid') {
+    state.units = (parsed.linearUnit || 'meter') === 'meter' ? 'm' : 'ft';
+    if (parsed.linearUnit === 'usfoot' || parsed.linearUnit === 'foot') state.foot = parsed.linearUnit;
+    state.interval = state.units === 'm' ? 1000 : 100;
+  }
+  applyFootSetting();
+  return def;
+}
+
 async function loadFile(file) {
   const msg = $('fileMsg');
   msg.hidden = false;
@@ -167,35 +252,30 @@ async function loadFile(file) {
   msg.textContent = `Reading ${file.name}…`;
   try {
     const parsed = await parseFile(file);
-    state.file = parsed;
-    state.lineId = parsed.lines[0].id;
-    state.control = [];
-    state.transform = null;
-    state.frame = null;
-    state.target = null;
-    $('targetSta').value = '';
+    pendingParse = parsed;
 
-    const line = parsed.lines[0];
-    state.staStart = line.staStart ?? 0;
-    state.equations = (line.equations || []).map(e => ({ along: e.dist, ahead: e.ahead }));
-
-    if (parsed.crs === 'grid') {
-      state.units = (parsed.linearUnit || 'meter') === 'meter' ? 'm' : 'ft';
-      // The file's declared foot wins over the setting — a LandXML that says
-      // USSurveyFoot is not a preference.
-      if (parsed.linearUnit === 'usfoot' || parsed.linearUnit === 'foot') state.foot = parsed.linearUnit;
-    }
-    applyFootSetting();
-    state.interval = state.units === 'm' ? 1000 : 100;
+    // Anything the file calls an alignment is one. Otherwise, a single line is
+    // unambiguous; several mean the crew has to say which is which.
+    const declared = parsed.lines.filter(l => l.kind === 'alignment');
+    const auto = declared.length ? declared : (parsed.lines.length === 1 ? parsed.lines : []);
+    const added = auto.map(line => addAlignment(parsed, line));
+    // The file you just opened is the one you want on the readout.
+    if (added.length) state.activeId = added[0].id;
 
     const bits = [`${parsed.source} · ${parsed.lines.length} line${parsed.lines.length > 1 ? 's' : ''}`];
-    if (parsed.crs === 'grid') bits.push(`grid coordinates (${parsed.linearUnit || 'units unknown'})`);
-    else bits.push('latitude / longitude');
+    bits.push(parsed.crs === 'grid'
+      ? `grid coordinates (${parsed.linearUnit || 'units unknown'})`
+      : 'latitude / longitude');
+    if (auto.length) bits.push(`added ${auto.length} alignment${auto.length > 1 ? 's' : ''}`);
     msg.className = 'msg ok';
     msg.textContent = bits.join(' · ');
     if (parsed.warnings.length) {
       msg.className = 'msg warn';
       msg.textContent += ' — ' + parsed.warnings.join(' ');
+    }
+    if (!auto.length) {
+      msg.className = 'msg warn';
+      msg.textContent += ' — pick which lines to add below';
     }
 
     syncSettingsInputs();
@@ -207,6 +287,34 @@ async function loadFile(file) {
     msg.textContent = err.message || String(err);
     console.error(err);
   }
+}
+
+function removeAlignment(id) {
+  const i = state.alignments.findIndex(a => a.id === id);
+  if (i < 0) return;
+  state.alignments.splice(i, 1);
+  built.delete(id);
+  // Pins keep their station on lines that are gone? No — drop those readings,
+  // because a station on an alignment nobody can see is a trap.
+  for (const m of state.marks) {
+    if (m.stations) m.stations = m.stations.filter(st => st.id !== id);
+  }
+  if (state.activeId === id) state.activeId = state.alignments[0]?.id ?? null;
+  build();
+  save();
+  renderProjectTab();
+  renderLog();
+}
+
+function setActiveAlignment(id) {
+  state.activeId = id;
+  state.alignment = built.get(id) || null;
+  view.activeId = id;
+  view.units = { label: unitLabel(), perMetre: unitsPerMetre(), interval: state.interval };
+  syncSettingsInputs();
+  renderAll();
+  renderProjectTab();
+  save();
 }
 
 /* ─────────────────────────── position sources ─────────────────────────── */
@@ -277,7 +385,7 @@ function applyFix(fix) {
   if (!state.frame) {
     lastFix = fix;
     $('staWarn').hidden = false;
-    $('staWarn').textContent = state.file
+    $('staWarn').textContent = state.alignments.length
       ? 'Georeference the alignment (Project tab) before it can be tracked.'
       : 'Load an alignment on the Project tab.';
     renderReadout(); renderTiles();
@@ -303,6 +411,22 @@ function applyFix(fix) {
   fix.x = smoothed[0]; fix.y = smoothed[1];
   lastFix = fix;
   view.fix = fix;
+
+  // With several lines in a trench, the one you are walking is the one you want
+  // on the readout — but only switch on a clear winner, or it flickers.
+  if (state.autoNearest && state.alignments.length > 1) {
+    const near = stationsAt(fix.x, fix.y);
+    if (near.length > 1 && near[0].id !== state.activeId) {
+      const current = near.find(n => n.id === state.activeId);
+      if (!current || near[0].distance < current.distance - 1.0) {
+        state.activeId = near[0].id;
+        state.alignment = built.get(state.activeId) || null;
+        view.activeId = state.activeId;
+        view.units = { label: unitLabel(), perMetre: unitsPerMetre(), interval: state.interval };
+        renderProjectTab();
+      }
+    }
+  }
   renderAll();
 }
 
@@ -730,6 +854,10 @@ function renderElevation() {
 
 function renderReadout() {
   const al = state.alignment;
+  const def = activeDef();
+  $('readoutLabel').textContent = (state.alignments.length > 1 && def)
+    ? def.name.toUpperCase().slice(0, 18)
+    : 'STATION';
   const staEl = $('staBig'), offEl = $('offBig'), warn = $('staWarn');
   const readout = $('readout');
   renderBadge();
@@ -838,6 +966,122 @@ function setPill(cls, text) {
 
 const fmt = (v, d = 2) => (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(d);
 
+/* ─────────────────────────── photos ─────────────────────────── */
+
+/**
+ * A photo is worth more than the note beside it when someone asks in six weeks
+ * what was in that trench. Capture goes through a normal file input so the
+ * phone's own camera does the work.
+ */
+function attachPhoto(pinId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.setAttribute('capture', 'environment');
+  input.style.display = 'none';
+  document.body.append(input);
+  input.onchange = async () => {
+    const files = [...(input.files || [])];
+    input.remove();
+    for (const file of files) {
+      try {
+        const mark = state.marks.find(m => m.id === pinId);
+        await savePhoto(pinId, file, {
+          station: mark?.station ?? null,
+          label: mark?.label ?? '',
+          lat: mark?.lat ?? null,
+          lon: mark?.lon ?? null
+        });
+      } catch (e) {
+        flash($('fileMsg'), 'err', `Could not save that photo: ${e.message}`);
+      }
+    }
+    renderLog();
+    renderPhotoSummary();
+  };
+  input.click();
+}
+
+async function fillThumbs(pinId, holder) {
+  let list;
+  try { list = await photosFor(pinId); } catch { return; }
+  holder.innerHTML = '';
+  list.forEach(record => {
+    const img = document.createElement('img');
+    img.className = 'thumb';
+    img.src = urlFor(record);
+    img.alt = record.name || 'site photo';
+    img.loading = 'lazy';
+    img.onclick = () => showPhoto(record);
+    holder.append(img);
+  });
+}
+
+function showPhoto(record) {
+  const overlay = $('photoOverlay');
+  $('photoImg').src = urlFor(record);
+  $('photoCaption').textContent = [
+    record.label,
+    record.station != null ? formatStation(record.station, state.interval, state.decimals) : null,
+    new Date(record.t).toLocaleString(),
+    `${Math.round((record.size || 0) / 1024)} kB`
+  ].filter(Boolean).join(' · ');
+  $('btnPhotoDelete').onclick = async () => {
+    await deletePhoto(record.id);
+    overlay.hidden = true;
+    renderLog();
+    renderPhotoSummary();
+  };
+  overlay.hidden = false;
+}
+
+async function renderPhotoSummary() {
+  try {
+    const n = await countPhotos();
+    $('photoCount').textContent = String(n);
+    $('btnExportPhotos').disabled = n === 0;
+  } catch { /* private mode, or no IndexedDB */ }
+}
+
+/** Everything a job needs to hand over: the photos and the record beside them. */
+async function exportPhotoPack() {
+  const list = await allPhotos();
+  if (!list.length) return;
+  const files = [];
+  const rows = [['file', 'pin', 'label', 'station', 'offset', 'unit', 'latitude', 'longitude', 'taken']];
+  const used = new Map();
+
+  for (const record of list) {
+    const mark = state.marks.find(m => m.id === record.pinId);
+    const base = slug(record.label || mark?.label || 'pin');
+    const n = (used.get(base) || 0) + 1;
+    used.set(base, n);
+    const name = `photos/${base}-${n}.jpg`;
+    files.push({ name, data: await blobBytes(record.blob), date: new Date(record.t) });
+    rows.push([
+      name,
+      record.pinId,
+      record.label || mark?.label || '',
+      mark?.station != null ? formatStation(mark.station, state.interval, state.decimals) : '',
+      mark?.offset != null ? mark.offset.toFixed(2) : '',
+      mark?.unitCode || mark?.unit || '',
+      record.lat != null ? record.lat.toFixed(9) : '',
+      record.lon != null ? record.lon.toFixed(9) : '',
+      new Date(record.t).toISOString()
+    ]);
+  }
+  const csv = rows.map(r => r.map(v => /[",\n]/.test(String(v)) ? `"${v}"` : v).join(',')).join('\n');
+  files.push({ name: 'photos.csv', data: new TextEncoder().encode(csv) });
+
+  const zip = makeZip(files);
+  const url = URL.createObjectURL(zip);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slug(state.projectName || state.alignment?.name || 'station')}-photos.zip`;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 /* ─────────────────────────── measuring ─────────────────────────── */
 
 let pinMode = false;
@@ -853,16 +1097,21 @@ function measurePoint(x, y, source, ele) {
     const ll = state.frame.toLL(x, y);
     p.lat = ll.lat; p.lon = ll.lon;
   }
-  if (state.alignment) {
-    const proj = state.alignment.project(x, y);
-    if (proj) { p.station = proj.station; p.offset = proj.offsetDisplay; }
+  const stations = stationsAt(x, y);
+  if (stations.length) {
+    p.stations = stations;
+    const primary = stations.find(st => st.id === state.activeId) || stations[0];
+    p.station = primary.station;
+    p.offset = primary.offset;
   }
   return p;
 }
 
-function addMeasurePoint(x, y, source, ele) {
+function addMeasurePoint(x, y, source, ele, pin) {
   state.measure.active = true;
-  state.measure.points.push(measurePoint(x, y, source, ele));
+  const p = measurePoint(x, y, source, ele);
+  if (pin) { p.pinId = pin.id; p.label = pin.label; }
+  state.measure.points.push(p);
   renderMeasure();
   save();
 }
@@ -963,7 +1212,7 @@ function renderVertices() {
       p.station != null ? `STA ${formatStation(p.station, state.interval, state.decimals)}` : null,
       p.offset != null ? formatOffset(p.offset, units, state.decimals) : null,
       p.ele != null ? `EL ${fmt(units === 'ft' ? p.ele / footMetres() : p.ele, 2)} ${units}` : null,
-      p.source === 'map' ? 'tapped on the map' : null
+      p.source === 'pin' ? `from pin ${p.label || ''}`.trim() : (p.source === 'map' ? 'tapped on the map' : null)
     ].filter(Boolean).join(' · ');
     main.append(head, sub);
     const del = document.createElement('button');
@@ -1124,7 +1373,13 @@ const toUnit = (metres, unit) => unit === 'ft' ? metres / footMetres() : metres;
 
 /** One tap on the map means different things depending on what you are doing. */
 function onMapTap(x, y, pinIndex) {
-  if (state.measure.active) { addMeasurePoint(x, y, 'map', null); return; }
+  if (state.measure.active) {
+    // Tapping a pin measures from the pin itself, not from a thumb-width away.
+    const pin = pinIndex != null ? state.marks[pinIndex] : null;
+    if (pin && pin.x != null) addMeasurePoint(pin.x, pin.y, 'pin', pin.ele, pin);
+    else addMeasurePoint(x, y, 'map', null);
+    return;
+  }
   if (pinMode) { dropPinAt(x, y); return; }
   if (pinIndex != null) { selectPin(pinIndex); return; }
 }
@@ -1153,12 +1408,18 @@ function addMark() {
   }
   const note = $('markNote').value.trim();
   const q = lastFix.q || {};
+  const stations = stationsAt(lastFix.x, lastFix.y);
   state.marks.push({
     id: `p${Date.now()}`,
+    // Station and offset on every line in the project, nearest first. On a job
+    // where sewer, storm and water share a trench, one of those is the answer
+    // and you do not always know which until later.
+    stations,
+    alignmentId: state.activeId,
     label: note || `Pin ${state.marks.length + 1}`,
     t: Date.now(),
-    station: p.station,
-    offset: p.offsetDisplay,
+    station: (stations.find(st => st.id === state.activeId) || stations[0] || {}).station ?? p.station,
+    offset: (stations.find(st => st.id === state.activeId) || stations[0] || {}).offset ?? p.offsetDisplay,
     unit: unitLabel(),
     unitCode: unitCode(),
     lat: lastFix.lat ?? null,
@@ -1188,15 +1449,18 @@ function addMark() {
 
 /** A pin placed by tapping the plan, rather than by standing on it. */
 function dropPinAt(x, y) {
-  const proj = state.alignment ? state.alignment.project(x, y) : null;
+  const stations = stationsAt(x, y);
+  const primary = stations.find(st => st.id === state.activeId) || stations[0] || null;
   const ll = state.frame ? state.frame.toLL(x, y) : null;
   const label = $('markNote').value.trim();
   state.marks.push({
     id: `p${Date.now()}`,
     label: label || `Pin ${state.marks.length + 1}`,
     t: Date.now(),
-    station: proj ? proj.station : null,
-    offset: proj ? proj.offsetDisplay : null,
+    stations,
+    alignmentId: state.activeId,
+    station: primary ? primary.station : null,
+    offset: primary ? primary.offset : null,
     unit: unitLabel(),
     lat: ll ? ll.lat : null,
     lon: ll ? ll.lon : null,
@@ -1266,6 +1530,21 @@ function renderLog() {
       m.demo ? 'DEMO' : null
     ].filter(Boolean).join(' · ');
     main.append(sta, sub);
+
+    // Every alignment this pin has a reading on. On a shared trench that is the
+    // whole point: one pin, a station on the sewer and a station on the storm.
+    if (m.stations && m.stations.length > 1) {
+      const lines = document.createElement('div');
+      lines.className = 'logrow-stations';
+      m.stations.forEach(st => {
+        const row2 = document.createElement('div');
+        row2.className = 'stationline' + (st.id === m.alignmentId ? ' is-primary' : '');
+        row2.textContent = `${st.name}  ${formatStation(st.station, state.interval, state.decimals)}  ${formatOffset(st.offset, st.unit, state.decimals)}`;
+        lines.append(row2);
+      });
+      main.append(lines);
+    }
+
     if (m.label && m.station != null) {
       const label = document.createElement('div');
       label.className = 'logrow-note';
@@ -1279,6 +1558,20 @@ function renderLog() {
       main.append(note);
     }
     row.classList.toggle('is-on', state.pinTarget === m.id);
+
+    const shots = document.createElement('div');
+    shots.className = 'thumbs';
+    shots.dataset.pin = m.id;
+    main.append(shots);
+    fillThumbs(m.id, shots);
+
+    const cam = document.createElement('button');
+    cam.className = 'icon-btn';
+    cam.type = 'button';
+    cam.title = 'Add a photo';
+    cam.setAttribute('aria-label', 'Add a photo to this pin');
+    cam.textContent = '\u{1F4F7}';
+    cam.onclick = () => attachPhoto(m.id);
 
     const go = document.createElement('button');
     go.className = 'icon-btn';
@@ -1295,11 +1588,12 @@ function renderLog() {
     del.textContent = '✕';
     del.onclick = () => {
       if (state.pinTarget === m.id) { state.pinTarget = null; view.target = null; }
+      deletePhotosFor(m.id).catch(() => {});
       state.marks.splice(i, 1);
       view.selectedMark = null;
       refreshMarkXY(); renderLog(); renderTarget(); save(); view.draw();
     };
-    row.append(main, go, del);
+    row.append(main, cam, go, del);
     list.append(row);
   });
   refreshMarkXY();
@@ -1381,46 +1675,18 @@ const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^
 /* ─────────────────────────── project tab ─────────────────────────── */
 
 function renderProjectTab() {
-  const has = !!state.file;
-  $('linePick').hidden = !has || state.file.lines.length < 2;
+  const has = state.alignments.length > 0;
+  const anyGrid = state.alignments.some(a => a.crs === 'grid');
   $('setupBlock').hidden = !has;
   $('dangerBlock').hidden = !has;
-  $('georefBlock').hidden = !has || state.file.crs !== 'grid';
-  if (!has) return;
+  $('georefBlock').hidden = !anyGrid;
+  $('alignBlock').hidden = !has;
+  renderAlignments();
+  renderLinePicker();
+  if (!has) { $('projectName').textContent = state.projectName || 'No alignment loaded'; return; }
 
-  // line picker
-  const list = $('lineList');
-  list.innerHTML = '';
-  const upm = unitsPerMetre();
-  state.file.lines.forEach(l => {
-    const row = document.createElement('label');
-    row.className = 'linerow' + (l.id === state.lineId ? ' is-on' : '');
-    const radio = document.createElement('input');
-    radio.type = 'radio'; radio.name = 'line'; radio.checked = l.id === state.lineId;
-    radio.onchange = () => {
-      state.lineId = l.id;
-      if (l.staStart != null) state.staStart = l.staStart;
-      state.equations = (l.equations || []).map(e => ({ along: e.dist, ahead: e.ahead }));
-      syncSettingsInputs();
-      build(); save(); renderProjectTab();
-    };
-    const main = document.createElement('div');
-    main.className = 'linerow-main';
-    const nm = document.createElement('div');
-    nm.className = 'linerow-name';
-    nm.textContent = l.name;
-    const sub = document.createElement('div');
-    sub.className = 'linerow-sub';
-    sub.textContent = state.file.crs === 'geographic'
-      ? `${l.coords.length} pts`
-      : `${l.rawLength.toFixed(1)} ${unitLabel()} · ${l.coords.length} pts${l.layer ? ' · ' + l.layer : ''}`;
-    main.append(nm, sub);
-    row.append(radio, main);
-    list.append(row);
-  });
-
-  // summary
   const al = state.alignment;
+  const def = activeDef();
   $('alignSummary').textContent = al
     ? `${al.name} · ${fmt(al.lengthDisplay, 2)} ${unitLabel()} long · ` +
       `${formatStation(al.stationAt(0), state.interval, state.decimals)} to ${formatStation(al.stationAt(al.length), state.interval, state.decimals)}` +
@@ -1429,14 +1695,104 @@ function renderProjectTab() {
 
   renderEquations();
   renderControl();
-  $('projectName').textContent = al ? al.name : (state.file.fileName || 'Alignment');
+  $('projectName').textContent = state.projectName || (al ? al.name : def.fileName || 'Alignment');
+}
+
+/** The alignments in this project: which one has the readout, and what else is here. */
+function renderAlignments() {
+  const list = $('alignList');
+  list.innerHTML = '';
+  $('alignCount').textContent = String(state.alignments.length);
+  $('chkAutoNearest').checked = state.autoNearest;
+
+  state.alignments.forEach(def => {
+    const al = built.get(def.id);
+    const row = document.createElement('label');
+    row.className = 'linerow' + (def.id === state.activeId ? ' is-on' : '');
+    const radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'activeAlignment';
+    radio.checked = def.id === state.activeId;
+    radio.onchange = () => setActiveAlignment(def.id);
+
+    const main = document.createElement('div');
+    main.className = 'linerow-main';
+    const nm = document.createElement('input');
+    nm.type = 'text';
+    nm.className = 'inline-name';
+    nm.value = def.name;
+    nm.onchange = () => {
+      def.name = nm.value.trim() || 'Alignment';
+      build(); save(); renderProjectTab(); renderLog();
+    };
+    const sub = document.createElement('div');
+    sub.className = 'linerow-sub';
+    sub.textContent = al
+      ? `${fmt(al.lengthDisplay, 1)} ${unitLabel(def)} · ` +
+        `${formatStation(al.stationAt(0), state.interval, 0)} to ${formatStation(al.stationAt(al.length), state.interval, 0)}` +
+        ` · ${def.source}`
+      : `${def.source} · ${def.coords.length} pts`;
+    main.append(nm, sub);
+
+    const del = document.createElement('button');
+    del.className = 'icon-btn';
+    del.type = 'button';
+    del.setAttribute('aria-label', `Remove ${def.name}`);
+    del.textContent = '✕';
+    del.onclick = e => { e.preventDefault(); removeAlignment(def.id); };
+
+    row.append(radio, main, del);
+    list.append(row);
+  });
+}
+
+/** Lines in the loaded file that are not yet alignments in the project. */
+function renderLinePicker() {
+  const wrap = $('linePick');
+  const list = $('lineList');
+  list.innerHTML = '';
+  const used = new Set(state.alignments.map(a => `${a.fileName}::${a.name}`));
+  const spare = pendingParse
+    ? pendingParse.lines.filter(l => !used.has(`${pendingParse.fileName}::${l.name}`))
+    : [];
+  wrap.hidden = !spare.length;
+  if (!spare.length) return;
+
+  spare.forEach(l => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'linerow';
+    const main = document.createElement('div');
+    main.className = 'linerow-main';
+    const nm = document.createElement('div');
+    nm.className = 'linerow-name';
+    nm.textContent = l.name;
+    const sub = document.createElement('div');
+    sub.className = 'linerow-sub';
+    sub.textContent = pendingParse.crs === 'geographic'
+      ? `${l.coords.length} pts`
+      : `${l.rawLength.toFixed(1)} ${unitLabel()} · ${l.coords.length} pts${l.layer ? ' · ' + l.layer : ''}`;
+    main.append(nm, sub);
+    const add = document.createElement('span');
+    add.className = 'add-mark';
+    add.textContent = '+';
+    row.append(main, add);
+    row.onclick = () => {
+      const def = addAlignment(pendingParse, l);
+      state.activeId = def.id;
+      syncSettingsInputs();
+      build(); save(); renderProjectTab();
+    };
+    list.append(row);
+  });
 }
 
 function renderEquations() {
   const list = $('eqList');
-  $('eqCount').textContent = state.equations.length;
+  const def = activeDef();
+  const equations = def ? def.equations : [];
+  $('eqCount').textContent = equations.length;
   list.innerHTML = '';
-  state.equations.forEach((e, i) => {
+  equations.forEach((e, i) => {
     const row = document.createElement('div');
     row.className = 'ctrlrow';
     const main = document.createElement('div');
@@ -1444,7 +1800,7 @@ function renderEquations() {
     main.innerHTML = `<b>ahead ${formatStation(e.ahead, state.interval, 2)}</b>at ${fmt(e.along, 2)} ${unitLabel()} from start`;
     const del = document.createElement('button');
     del.className = 'icon-btn'; del.type = 'button'; del.textContent = '✕';
-    del.onclick = () => { state.equations.splice(i, 1); build(); save(); renderProjectTab(); };
+    del.onclick = () => { equations.splice(i, 1); build(); save(); renderProjectTab(); };
     row.append(main, del);
     list.append(row);
   });
@@ -1479,7 +1835,7 @@ function renderControl() {
   out.innerHTML =
     `<b>Georeferenced from ${state.control.length} point${state.control.length > 1 ? 's' : ''}.</b> ` +
     `Grid north is rotated ${fmt(t.rotation > 180 ? t.rotation - 360 : t.rotation, 3)}° from true north · ` +
-    `scale ${t.scale.toFixed(7)} m per ${u === 'ft' ? (state.file.linearUnit === 'usfoot' ? 'US survey foot' : 'foot') : 'unit'}<br>` +
+    `scale ${t.scale.toFixed(7)} m per ${u === 'ft' ? (metresPerFileUnit() === M_PER_US_FT ? 'US survey foot' : 'foot') : 'unit'}<br>` +
     (state.control.length > 1
       ? `RMS residual <b>${fmt(t.rms * unitsPerMetre(), 2)} ${u}</b>${res ? ' · ' + res : ''}`
       : 'Single point — grid north assumed true and scale taken from the file units. Expect metres of error over any distance.');
@@ -1529,8 +1885,8 @@ function addControlPoint() {
     if (sta == null || !isFinite(off)) return flash(msg, 'err', 'Enter a station, and an offset (0 if you are on the centreline).');
     // Solve in raw grid space: file units in, file units out.
     const gridAl = new Alignment(line.coords.map(c => [c[0], c[1]]), {
-      staStart: state.staStart, unitsPerMetre: 1,
-      equations: state.equations.map(e => ({ dist: e.along, ahead: e.ahead }))
+      staStart: line.staStart, unitsPerMetre: 1,
+      equations: (line.equations || []).map(e => ({ dist: e.along, ahead: e.ahead }))
     });
     const d = gridAl.distanceAtStation(sta);
     if (d == null) return flash(msg, 'err', `Station ${$('cpSta').value} is not on this alignment.`);
@@ -1569,12 +1925,14 @@ function flash(el, cls, text) {
 
 function syncSettingsInputs() {
   $('selUnit').value = state.units === 'm' ? 'm' : state.foot;
-  $('selUnit').disabled = state.file?.crs === 'grid';
+  $('selUnit').disabled = state.alignments.some(a => a.crs === 'grid');
   $('selInterval').value = String(state.interval);
   $('selDecimals').value = String(state.decimals);
-  $('inpStaStart').value = formatStation(state.staStart, state.interval, 2);
+  $('inpStaStart').value = formatStation(activeDef()?.staStart ?? 0, state.interval, 2);
   $('chkSmooth').checked = state.smooth;
   $('chkDemo').checked = state.demo;
+  $('chkAutoNearest').checked = state.autoNearest;
+  $('inpProjectName').value = state.projectName || '';
   $('selBaud').value = String(state.baud);
   $('inpAntenna').value = state.antenna ? String(state.antenna) : '';
   const n = state.ntrip;
@@ -1599,13 +1957,14 @@ function doSave() {
   // Receiver and caster settings outlive any one alignment, so they are stored
   // even when no project is loaded. The caster password only if asked for.
   saveSettings();
-  if (!state.file) { localStorage.removeItem(STORE_KEY); return; }
+  if (!state.alignments.length) { localStorage.removeItem(STORE_KEY); return; }
   const payload = {
     v: 1,
-    file: state.file,
-    lineId: state.lineId,
+    alignments: state.alignments,
+    activeId: state.activeId,
+    autoNearest: state.autoNearest,
+    projectName: state.projectName,
     units: state.units, foot: state.foot, interval: state.interval, decimals: state.decimals,
-    staStart: state.staStart, equations: state.equations,
     control: state.control, transform: state.transform,
     frame: state.frame ? state.frame.toJSON() : null,
     marks: state.marks, target: state.target, smooth: state.smooth,
@@ -1614,7 +1973,8 @@ function doSave() {
   let text = JSON.stringify(payload);
   if (text.length > MAX_STORE) {
     // Too big for localStorage — keep the chosen line only.
-    const trimmed = { ...payload, file: { ...state.file, lines: state.file.lines.filter(l => l.id === state.lineId), points: [] } };
+    // Point clouds from a survey file are the bulky part and are only decoration.
+    const trimmed = { ...payload, alignments: state.alignments.map(a => ({ ...a, points: [] })) };
     text = JSON.stringify(trimmed);
   }
   try {
@@ -1664,10 +2024,11 @@ function restore() {
   if (!raw) return false;
   try {
     const p = JSON.parse(raw);
-    if (!p.file) return false;
+    if (!p.alignments || !p.alignments.length) return false;
     Object.assign(state, {
-      file: p.file, lineId: p.lineId, units: p.units, interval: p.interval,
-      decimals: p.decimals ?? 2, staStart: p.staStart, equations: p.equations || [],
+      alignments: p.alignments, activeId: p.activeId, autoNearest: !!p.autoNearest,
+      projectName: p.projectName || '', units: p.units, interval: p.interval,
+      decimals: p.decimals ?? 2,
       control: p.control || [], transform: p.transform || null,
       marks: p.marks || [], target: p.target ?? null, smooth: p.smooth !== false,
       measure: p.measure && Array.isArray(p.measure.points) ? { active: false, ...p.measure } : { mode: 'distance', points: [], active: false },
@@ -1695,8 +2056,10 @@ function resetProject() {
   if (!confirm('Clear the alignment, control points and all marks from this device?')) return;
   stopGps();
   setDemo(false);
+  pendingParse = null;
+  built.clear();
   Object.assign(state, {
-    file: null, lineId: null, staStart: 0, equations: [], control: [],
+    alignments: [], activeId: null, control: [],
     transform: null, frame: null, alignment: null, marks: [], target: null, lastProjection: null,
     measure: { mode: state.measure.mode, points: [], active: false }, saved: [], pinTarget: null
   });
@@ -1775,7 +2138,8 @@ function bind() {
   $('selDecimals').onchange = e => { state.decimals = Number(e.target.value); renderAll(); renderLog(); save(); };
   $('inpStaStart').onchange = e => {
     const v = parseStation(e.target.value, state.interval);
-    state.staStart = v ?? 0;
+    const def = activeDef();
+    if (def) def.staStart = v ?? 0;
     syncSettingsInputs(); build(); save(); renderProjectTab();
   };
 
@@ -1783,8 +2147,10 @@ function bind() {
     const along = Number($('eqDist').value);
     const ahead = parseStation($('eqAhead').value, state.interval);
     if (!isFinite(along) || ahead == null) return;
-    state.equations.push({ along, ahead });
-    state.equations.sort((a, b) => a.along - b.along);
+    const def = activeDef();
+    if (!def) return;
+    def.equations.push({ along, ahead });
+    def.equations.sort((a, b) => a.along - b.along);
     $('eqDist').value = ''; $('eqAhead').value = '';
     build(); save(); renderProjectTab();
   };
@@ -1868,6 +2234,13 @@ function bind() {
 
   // log
   $('btnExportCsv').onclick = exportCsv;
+  $('btnExportPhotos').onclick = exportPhotoPack;
+  $('btnPhotoClose').onclick = () => { $('photoOverlay').hidden = true; };
+  $('btnPinPhoto').onclick = () => {
+    addMark();
+    const last = state.marks[state.marks.length - 1];
+    if (last) attachPhoto(last.id);
+  };
   $('btnExportGeo').onclick = exportGeoJson;
   $('btnClearLog').onclick = () => {
     if (!state.marks.length || !confirm('Delete every mark?')) return;
@@ -1875,6 +2248,12 @@ function bind() {
   };
 
   // project
+  $('chkAutoNearest').onchange = e => { state.autoNearest = e.target.checked; save(); };
+  $('inpProjectName').onchange = e => {
+    state.projectName = e.target.value.trim();
+    $('projectName').textContent = state.projectName || (state.alignment?.name ?? 'Alignment');
+    save();
+  };
   $('btnSave').onclick = doSave;
   $('btnReset').onclick = resetProject;
 }
@@ -1910,6 +2289,7 @@ setTopH();
 
 syncSettingsInputs();
 if (!restore()) { renderProjectTab(); renderLog(); renderSaved(); }
+renderPhotoSummary();
 $('btnFollow').classList.toggle('is-on', view.follow);
 renderAll();
 
@@ -1920,6 +2300,7 @@ if (new URLSearchParams(location.search).has('debug')) {
   window.stationDebug = {
     feedNmea: text => nmea.push(text),
     state,
+    view,
     get fix() { return lastFix; },
     get roverFix() { return lastRoverFix; }
   };

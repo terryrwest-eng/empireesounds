@@ -12,6 +12,8 @@ export class PlanView {
     this.cx = 0; this.cy = 0; // view centre in local metres
     this.follow = true;
     this.alignment = null;
+    this.alignmentList = [];
+    this.activeId = null;
     this.drawPts = [];
     this.marks = [];
     this.selectedMark = null;
@@ -31,10 +33,40 @@ export class PlanView {
   }
 
   setAlignment(al, units) {
-    this.alignment = al;
+    this.setAlignments(al ? [{ id: 'one', name: al.name, al }] : [], 'one', units);
+  }
+
+  /**
+   * A job can have several alignments running together. All of them draw; the
+   * active one is the bright line with the station ticks, because that is the
+   * one the readout is talking about.
+   */
+  setAlignments(list, activeId, units) {
+    this.alignmentList = list || [];
+    this.activeId = activeId;
     this.units = units || this.units;
-    this.drawPts = al ? al.xy : [];
-    if (al) this.fit();
+    const active = this.alignmentList.find(a => a.id === activeId) || this.alignmentList[0];
+    this.alignment = active ? active.al : null;
+    this.drawPts = this.alignment ? this.alignment.xy : [];
+    if (this.alignmentList.length) this.fitAll();
+  }
+
+  /** Frame everything in the project, not just the line with the readout. */
+  fitAll(pad = 0.12) {
+    if (!this.alignmentList || !this.alignmentList.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const item of this.alignmentList) {
+      const b = item.al.bounds();
+      minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY);
+      maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY);
+    }
+    const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
+    const { width, height } = this._size();
+    this.scale = Math.min(width / (w * (1 + pad * 2)), height / (h * (1 + pad * 2)));
+    this.cx = (minX + maxX) / 2;
+    this.cy = (minY + maxY) / 2;
+    this.follow = false;
+    this.draw();
   }
 
   fit(pad = 0.12) {
@@ -181,6 +213,10 @@ export class PlanView {
     if (this.follow && this.fix) this.centreOn(this.fix.x, this.fix.y);
 
     this._grid(ctx, width, height);
+    for (const item of this.alignmentList) {
+      if (item.id === this.activeId) continue;
+      this._otherAlignment(ctx, item);
+    }
     if (this.alignment) {
       this._alignment(ctx);
       this._ticks(ctx);
@@ -233,15 +269,50 @@ export class PlanView {
     this._path(ctx, pts, stride); ctx.stroke();
 
     // ends
-    const ends = [[pts[0], 'BOA'], [pts[pts.length - 1], 'EOA']];
+    const active = this.alignmentList.find(a => a.id === this.activeId);
+    const ends = [
+      [pts[0], active ? `${active.name} BOA` : 'BOA'],
+      [pts[pts.length - 1], 'EOA']
+    ];
     ctx.font = '600 11px ui-monospace,Menlo,monospace';
     for (const [p, label] of ends) {
       const [sx, sy] = this.toScreen(p[0], p[1]);
       ctx.fillStyle = '#E6D2A6';
       ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 7); ctx.fill();
-      ctx.fillStyle = 'rgba(241,234,223,.6)';
-      ctx.fillText(label, sx + 7, sy - 6);
+      const lw = ctx.measureText(label).width;
+      if (this._claimLabel(sx + 7 + lw / 2, sy - 10, lw + 4, 13)) {
+        ctx.fillStyle = 'rgba(241,234,223,.6)';
+        ctx.fillText(label, sx + 7, sy - 6);
+      }
     }
+  }
+
+  /** A line in the project that does not currently have the readout. */
+  _otherAlignment(ctx, item) {
+    const pts = item.al.xy;
+    if (pts.length < 2) return;
+    const stride = Math.max(1, Math.floor(pts.length / 3000));
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(201,169,107,.32)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    this._path(ctx, pts, stride);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Name it at its midpoint, so parallel pipelines can be told apart.
+    const mid = pts[Math.floor(pts.length / 2)];
+    const [sx, sy] = this.toScreen(mid[0], mid[1]);
+    ctx.font = '600 10px ui-monospace,Menlo,monospace';
+    ctx.textAlign = 'center';
+    const w = ctx.measureText(item.name).width + 8;
+    if (this._claimLabel(sx, sy - 12, w, 14)) {
+      ctx.fillStyle = 'rgba(20,16,14,.8)';
+      ctx.fillRect(sx - w / 2, sy - 19, w, 14);
+      ctx.fillStyle = 'rgba(201,169,107,.85)';
+      ctx.fillText(item.name, sx, sy - 8);
+    }
+    ctx.textAlign = 'left';
   }
 
   _path(ctx, pts, stride) {

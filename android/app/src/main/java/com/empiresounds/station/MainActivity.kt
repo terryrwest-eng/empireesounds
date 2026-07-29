@@ -3,6 +3,8 @@ package com.empiresounds.station
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.net.Uri
+import android.provider.MediaStore
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -14,13 +16,17 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.webkit.ValueCallback
 import android.webkit.WebViewClient
 import android.widget.EditText
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
 
@@ -33,6 +39,26 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
     private lateinit var assetLoader: WebViewAssetLoader
+
+    // A photo on a pin goes through the page's own file input, so the WebView
+    // has to be given a chooser — without this, tapping the camera does nothing.
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var cameraUri: Uri? = null
+
+    private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val cb = fileCallback
+        fileCallback = null
+        if (cb == null) return@registerForActivityResult
+        val fromChooser = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        val uris = when {
+            fromChooser != null && fromChooser.isNotEmpty() -> fromChooser
+            // The camera writes to the uri we handed it and returns no data.
+            result.resultCode == RESULT_OK && cameraUri != null -> arrayOf(cameraUri!!)
+            else -> null
+        }
+        cb.onReceiveValue(uris)
+        cameraUri = null
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,6 +122,31 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
 
+            override fun onShowFileChooser(
+                view: WebView?,
+                callback: ValueCallback<Array<Uri>>,
+                params: FileChooserParams
+            ): Boolean {
+                fileCallback?.onReceiveValue(null)
+                fileCallback = callback
+                val content = params.createIntent()
+                val chooser = Intent.createChooser(content, getString(R.string.pick_photo))
+
+                // Offer the camera alongside the gallery: a crew photographing a
+                // trench is taking the picture now, not finding it later.
+                cameraCaptureIntent()?.let { camera ->
+                    chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(camera))
+                }
+                return try {
+                    filePicker.launch(chooser)
+                    true
+                } catch (e: Exception) {
+                    fileCallback = null
+                    cameraUri = null
+                    false
+                }
+            }
+
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
                 // Our own page, our own permission — already asked for below.
                 val granted = ContextCompat.checkSelfPermission(
@@ -120,6 +171,23 @@ class MainActivity : AppCompatActivity() {
 
         askForPermissions()
         web.loadUrl("https://appassets.androidplatform.net/assets/station/index.html")
+    }
+
+    private fun cameraCaptureIntent(): Intent? {
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (intent.resolveActivity(packageManager) == null) return null
+        return try {
+            val dir = File(cacheDir, "captures").apply { mkdirs() }
+            val file = File.createTempFile("shot", ".jpg", dir)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            cameraUri = uri
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            intent
+        } catch (e: Exception) {
+            cameraUri = null
+            null
+        }
     }
 
     /** Events land on whatever thread produced them; the WebView needs the UI one. */

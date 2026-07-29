@@ -48,6 +48,27 @@ fs.writeFileSync(path.join(OUT, 'alignment.xml'), `<?xml version="1.0"?>
 </LandXML>
 `);
 
+/* ---- LandXML: two pipelines in one trench, different stationing ---- */
+
+// SAN runs east on N 5000 from 10+00; STORM is 25 ft south of it, at 50+00.
+fs.writeFileSync(path.join(OUT, 'pipelines.xml'), `<?xml version="1.0"?>
+<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" version="1.2">
+  <Units><Imperial linearUnit="USSurveyFoot" areaUnit="squareFoot" volumeUnit="cubicFeet" temperatureUnit="fahrenheit" pressureUnit="inHG"/></Units>
+  <Alignments name="Trench">
+    <Alignment name="SAN SEWER" staStart="1000" length="1000">
+      <CoordGeom><Line length="1000">
+        <Start>5000.000000 10000.000000</Start><End>5000.000000 11000.000000</End>
+      </Line></CoordGeom>
+    </Alignment>
+    <Alignment name="STORM DRAIN" staStart="5000" length="1000">
+      <CoordGeom><Line length="1000">
+        <Start>4975.000000 10000.000000</Start><End>4975.000000 11000.000000</End>
+      </Line></CoordGeom>
+    </Alignment>
+  </Alignments>
+</LandXML>
+`);
+
 /* ---- DXF: LWPOLYLINE, 100 ft tangent then a 90° arc of R=100 ---- */
 
 const dxfLen = 100 + Math.PI / 2 * 100;
@@ -101,7 +122,10 @@ const expected = {
   },
   dxf: { totalFt: dxfLen },
   gpx: { lengthM: parallelArc(lat, lon1 - lon0) },
-  csv: { points: 3 }
+  csv: { points: 3 },
+  // standing at grid (10250, 4990): 250 ft along both lines, 10 ft south of SAN
+  // (right of an eastbound line) and 15 ft north of STORM (left of it)
+  pipelines: { sanStation: 1250, sanOffset: 10, stormStation: 5250, stormOffset: -15 }
 };
 fs.writeFileSync(path.join(OUT, 'expected.json'), JSON.stringify(expected, null, 2));
 console.log(JSON.stringify(expected, null, 2));

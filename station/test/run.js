@@ -66,6 +66,7 @@ const near = (name, got, want, tol) =>
     dxf: fs.readFileSync(path.join(FIX, 'plan.dxf'), 'utf8'),
     gpx: fs.readFileSync(path.join(FIX, 'track.gpx'), 'utf8'),
     csv: fs.readFileSync(path.join(FIX, 'points.csv'), 'utf8'),
+    pipelines: fs.readFileSync(path.join(FIX, 'pipelines.xml'), 'utf8'),
     gga: nmea('GPGGA,120000.00,3348.00000,N,11711.70000,W,4,18,0.6,120.5,M,-33.2,M,1.2,0123'),
     gst: nmea('GPGST,120000.00,0.010,0.012,0.008,31.0,0.008,0.011,0.019'),
     single: nmea('GPGGA,120001.00,3348.00000,N,11711.70000,W,1,07,2.4,120.5,M,-33.2,M,,'),
@@ -129,6 +130,32 @@ const near = (name, got, want, tol) =>
       i: quadrantBearing(90), j: quadrantBearing(135),
       k: quadrantBearing(89.9999999), l: quadrantBearing(45.5, { seconds: false })
     };
+    // ---- two pipelines, one trench ----
+    const pl = parseLandXML(t.pipelines);
+    const alz = pl.lines.map(l => ({
+      name: l.name,
+      al: new Alignment(l.coords, { staStart: l.staStart, unitsPerMetre: 1 })
+    }));
+    out.pipes = {
+      unit: pl.linearUnit,
+      names: pl.lines.map(l => l.name),
+      kinds: pl.lines.map(l => l.kind),
+      readings: alz.map(a => {
+        const proj = a.al.project(10250, 4990);
+        return { name: a.name, station: proj.station, offset: proj.offsetDisplay, distance: proj.distance };
+      })
+    };
+
+    // ---- zip writer, read back by the KMZ reader ----
+    const { makeZip } = await import('./js/zip.js');
+    const { readKmzText } = await import('./js/parse.js');
+    const payload = '<?xml version="1.0"?><kml><Document><name>zip round trip</name></Document></kml>';
+    const zip = makeZip([
+      { name: 'doc.kml', data: new TextEncoder().encode(payload) },
+      { name: 'photos/one.jpg', data: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]) }
+    ]);
+    out.zip = { text: await readKmzText(await zip.arrayBuffer()), size: zip.size };
+
     // ---- measuring ----
     const M = await import('./js/measure.js');
     const sq = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
@@ -272,6 +299,24 @@ const near = (name, got, want, tol) =>
   ok('distance to the base computed', r.ntrip.km >= 20 && r.ntrip.km <= 25, String(r.ntrip.km));
   ok('RTCM message types framed', r.ntrip.types.join() === '1005,1074', r.ntrip.types.join());
 
+  // two pipelines
+  console.log('\n— two pipelines in one trench —');
+  ok('both alignments are read from one file', r.pipes.names.join() === 'SAN SEWER,STORM DRAIN', r.pipes.names.join());
+  ok('both are recognised as alignments', r.pipes.kinds.every(k => k === 'alignment'), JSON.stringify(r.pipes.kinds));
+  ok('US survey foot read from the file', r.pipes.unit === 'usfoot', r.pipes.unit);
+  const san = r.pipes.readings.find(x => x.name === 'SAN SEWER');
+  const storm = r.pipes.readings.find(x => x.name === 'STORM DRAIN');
+  near('one spot, sewer station', san.station, EXP.pipelines.sanStation, 1e-6);
+  near('one spot, sewer offset (right)', san.offset, EXP.pipelines.sanOffset, 1e-6);
+  near('same spot, storm station', storm.station, EXP.pipelines.stormStation, 1e-6);
+  near('same spot, storm offset (left)', storm.offset, EXP.pipelines.stormOffset, 1e-6);
+  ok('the two stationings really are different at the same point',
+     Math.abs(san.station - storm.station) === 4000, `${san.station} vs ${storm.station}`);
+  ok('the nearer line is the sewer', san.distance < storm.distance);
+
+  ok('a zip we wrote reads back through the zip reader', r.zip.text.includes('zip round trip'), r.zip.text.slice(0, 60));
+  ok('the zip has real bytes in it', r.zip.size > 200, String(r.zip.size));
+
   // measuring
   console.log('\n— measuring —');
   near('square area', r.measure.squareArea, 10000, 1e-9);
@@ -363,6 +408,27 @@ const near = (name, got, want, tol) =>
      JSON.stringify({ s: tapped.station, o: tapped.offset }));
   await page.click('#btnPinMode');
 
+  // a photo on a pin
+  const jpeg = Buffer.from(
+    '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a' +
+    'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA' +
+    'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==', 'base64');
+  const chooser = page.waitForEvent('filechooser');
+  await page.click('.tab[data-tab="log"]');
+  await page.click('#logList .logrow button[title="Add a photo"]');
+  await (await chooser).setFiles({ name: 'valve.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+  await page.waitForFunction(() => document.querySelectorAll('#logList .thumb').length > 0, null, { timeout: 8000 });
+  ok('a photo attaches to a pin and shows as a thumbnail', (await page.locator('#logList .thumb').count()) >= 1);
+  await page.waitForFunction(() => document.getElementById('photoCount').textContent !== '0', null, { timeout: 5000 });
+  ok('the photo count updates', (await page.textContent('#photoCount')) === '1', await page.textContent('#photoCount'));
+  ok('the photo export is enabled once there is one', !(await page.isDisabled('#btnExportPhotos')));
+
+  await page.click('#logList .thumb');
+  ok('tapping a thumbnail opens the viewer', await page.isVisible('#photoOverlay'));
+  ok('the viewer says where the photo was taken', /\d+\+\d\d/.test(await page.textContent('#photoCaption')),
+     await page.textContent('#photoCaption'));
+  await page.click('#btnPhotoClose');
+
   /* ---------------- UI: measuring ---------------- */
   console.log('\n— UI: measuring —');
   await page.click('.tab[data-tab="measure"]');
@@ -378,6 +444,25 @@ const near = (name, got, want, tol) =>
     await page.mouse.click(mapBox.x + mapBox.width * fx, mapBox.y + mapBox.height * fy);
     await page.waitForTimeout(90);
   }
+  // tapping an existing pin measures from the pin itself
+  // the map-dropped pin, which is the only one at its spot — the GPS pins are
+  // stacked on each other and any of them would be a fair answer
+  const pinPos = await page.evaluate(() => {
+    const m = window.stationDebug.state.marks.find(p => p.source === 'map');
+    return { x: m.x, y: m.y, id: m.id, label: m.label };
+  });
+  const pinScreen = await page.evaluate(([x, y]) => window.stationDebug.view.toScreen(x, y), [pinPos.x, pinPos.y]);
+  await page.mouse.click(mapBox.x + pinScreen[0], mapBox.y + pinScreen[1]);
+  await page.waitForTimeout(120);
+  const snapped = await page.evaluate(() => window.stationDebug.state.measure.points.at(-1));
+  ok('measuring snaps to a pin instead of near it',
+     snapped.source === 'pin' && Math.abs(snapped.x - pinPos.x) < 1e-9 && Math.abs(snapped.y - pinPos.y) < 1e-9,
+     JSON.stringify({ s: snapped.source, dx: snapped.x - pinPos.x }));
+  ok('the snapped point remembers which pin it came from',
+     snapped.pinId === pinPos.id && snapped.label === pinPos.label,
+     JSON.stringify({ got: snapped.pinId, want: pinPos.id, label: snapped.label }));
+  await page.click('#btnStripUndo');
+
   const mpts = await page.evaluate(() => window.stationDebug.state.measure.points.map(p => ({ x: p.x, y: p.y, station: p.station })));
   ok('four taps make four vertices', mpts.length === 4, String(mpts.length));
   ok('every measured vertex gets a station', mpts.every(p => p.station != null));
@@ -546,6 +631,91 @@ const near = (name, got, want, tol) =>
   await page.screenshot({ path: path.join(__dirname, 'shot-track-landxml.png') });
   await page.click('.tab[data-tab="project"]');
   await page.screenshot({ path: path.join(__dirname, 'shot-project.png'), fullPage: true });
+
+  /* ---------------- UI: two pipelines in one trench ---------------- */
+  console.log('\n— UI: two pipelines —');
+  const pctx = await browser.newContext({
+    permissions: ['geolocation'],
+    geolocation: { latitude: 33.8, longitude: -117.2, accuracy: 2 },
+    viewport: { width: 430, height: 932 }
+  });
+  const pp = await pctx.newPage();
+  const perrors = [];
+  pp.on('pageerror', e => perrors.push(e.message));
+  await pp.goto(BASE, { waitUntil: 'networkidle' });
+  await pp.click('.tab[data-tab="project"]');
+  await pp.setInputFiles('#fileInput', path.join(FIX, 'pipelines.xml'));
+  await pp.waitForFunction(() => document.getElementById('alignCount').textContent === '2', null, { timeout: 8000 });
+  const alignNames = await pp.$$eval('#alignList .inline-name', els => els.map(e => e.value));
+  ok('both pipelines load from one file as two alignments',
+     alignNames.join() === 'SAN SEWER,STORM DRAIN', alignNames.join());
+  ok('the names are editable in place', await pp.isEditable('#alignList .inline-name'));
+
+  // tie the grid down on the sewer
+  const usFt = 1200 / 3937;
+  const mpd2 = await pp.evaluate(async () => (await import('./js/geo.js')).metresPerDegree(33.8));
+  const pLat0 = 33.8, pLon0 = -117.2;
+  const addP = async (staTxt, lat, lon) => {
+    await pp.fill('#cpSta', staTxt); await pp.fill('#cpOff', '0');
+    await pp.fill('#cpLat', String(lat)); await pp.fill('#cpLon', String(lon));
+    await pp.click('#btnAddCtrl');
+  };
+  await addP('10+00', pLat0, pLon0);
+  await addP('15+00', pLat0, pLon0 + (500 * usFt) / mpd2.lon);
+  ok('the trench is georeferenced', (await pp.textContent('#fitOut')).includes('Georeferenced from 2'),
+     await pp.textContent('#fitOut'));
+
+  // stand 250 ft along, 10 ft south of the sewer
+  const standLat = pLat0 - (10 * usFt) / mpd2.lat;
+  const standLon = pLon0 + (250 * usFt) / mpd2.lon;
+  await pctx.setGeolocation({ latitude: standLat, longitude: standLon, accuracy: 2 });
+  await pp.click('.tab[data-tab="track"]');
+  await pp.click('#btnGps');
+  await pp.waitForFunction(() => /^\d+\+/.test(document.getElementById('staBig').textContent), null, { timeout: 10000 });
+  await pp.waitForTimeout(800);
+
+  ok('the readout names the line it is stationing on',
+     (await pp.textContent('#readoutLabel')) === 'SAN SEWER', await pp.textContent('#readoutLabel'));
+  const sanSta = await pp.textContent('#staBig');
+  ok(`sewer station reads 12+50 (${sanSta})`, /^12\+(49|50)/.test(sanSta.trim()), sanSta);
+  ok(`sewer offset reads 10 ft right (${await pp.textContent('#offBig')})`,
+     /(9\.9|10\.0)\d ft RT/.test(await pp.textContent('#offBig')), await pp.textContent('#offBig'));
+
+  // one pin, a station on each line
+  await pp.fill('#markNote', 'manhole');
+  await pp.click('#btnMark');
+  const pinRows = await pp.textContent('#logList');
+  ok('the pin records the sewer station', /SAN SEWER\s+12\+/.test(pinRows), pinRows.slice(0, 200));
+  ok('and the storm station at the same spot', /STORM DRAIN\s+52\+/.test(pinRows), pinRows.slice(0, 200));
+  const stations = await pp.evaluate(() => window.stationDebug.state.marks.at(-1).stations);
+  ok('both readings are stored on the pin', stations.length === 2, JSON.stringify(stations.map(s => s.name)));
+  const stormRead = stations.find(x => x.name === 'STORM DRAIN');
+  ok(`storm reads left of centreline (${stormRead.offset.toFixed(2)})`, stormRead.offset < -14 && stormRead.offset > -16,
+     String(stormRead.offset));
+
+  // switching which line has the readout
+  await pp.click('.tab[data-tab="project"]');
+  await pp.click('#alignList .linerow:nth-child(2) input[type=radio]');
+  await pp.click('.tab[data-tab="track"]');
+  await pp.waitForTimeout(300);
+  ok('switching alignment switches the readout',
+     (await pp.textContent('#readoutLabel')) === 'STORM DRAIN', await pp.textContent('#readoutLabel'));
+  ok(`and the station with it (${await pp.textContent('#staBig')})`,
+     /^52\+/.test((await pp.textContent('#staBig')).trim()), await pp.textContent('#staBig'));
+
+  // walk closer to the storm line with auto-nearest on
+  await pp.click('.tab[data-tab="project"]');
+  await pp.click('#alignList .linerow:nth-child(1) input[type=radio]');
+  await pp.check('#chkAutoNearest');
+  await pp.click('.tab[data-tab="track"]');
+  await pctx.setGeolocation({ latitude: pLat0 - (30 * usFt) / mpd2.lat, longitude: standLon, accuracy: 2 });
+  await pp.waitForFunction(() => document.getElementById('readoutLabel').textContent === 'STORM DRAIN', null, { timeout: 8000 })
+    .catch(() => {});
+  ok('walking to the other line hands the readout over',
+     (await pp.textContent('#readoutLabel')) === 'STORM DRAIN', await pp.textContent('#readoutLabel'));
+  ok('no page errors on the two-pipeline project', perrors.length === 0, perrors.join(' | '));
+  await pp.screenshot({ path: path.join(__dirname, 'shot-pipelines.png') });
+  await pctx.close();
 
   /* ---------------- native shell contract ---------------- */
   console.log('\n— Android shell (mock bridge) —');
