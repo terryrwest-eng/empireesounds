@@ -381,6 +381,51 @@ const near = (name, got, want, tol) =>
   await page.click('.tab[data-tab="track"]');
   await page.screenshot({ path: path.join(__dirname, 'shot-track-gpx.png') });
 
+  /* ---------------- UI: a file with no stationing ---------------- */
+  console.log('\n— a file that carries no stationing —');
+  await page.click('.tab[data-tab="project"]');
+  ok('the app says the stationing is only a guess', await page.isVisible('#noStationing'));
+  ok('and starts it at the end of the line the file drew first',
+     /0\+00\.00 to 30\+/.test(await page.textContent('#alignSummary')), await page.textContent('#alignSummary'));
+
+  // stand where you know the station and say so
+  await page.click('#btnCalibrateHere');
+  await page.fill('#inpCalStation', '20+00');
+  await page.click('#btnCalibrate');
+  await page.waitForTimeout(200);
+  ok('calibration reports the shift it made', (await page.textContent('#calMsg')).includes('shifted'),
+     await page.textContent('#calMsg'));
+  ok('the notice clears once the stationing is set', await page.isHidden('#noStationing'));
+
+  await page.click('.tab[data-tab="track"]');
+  await page.waitForTimeout(300);
+  ok(`the readout now reads what you told it (${await page.textContent('#staBig')})`,
+     /^20\+00\.0/.test((await page.textContent('#staBig')).trim()), await page.textContent('#staBig'));
+
+  // the pin dropped before calibration has to follow
+  const restationed = await page.evaluate(() => window.stationDebug.state.marks[0].station);
+  ok(`a pin set before calibration is re-stationed (${restationed.toFixed(2)})`,
+     Math.abs(restationed - 2000) < 1, String(restationed));
+
+  // and the direction the file drew in is not necessarily the plan's
+  await ctx.setGeolocation({ latitude: 33.8, longitude: -117.1975, accuracy: 4 });
+  await page.waitForTimeout(600);
+  const quarter = parseFloat((await page.textContent('#staBig')).replace('+', ''));
+  await page.click('.tab[data-tab="project"]');
+  await page.click('#btnReverse');
+  await page.click('.tab[data-tab="track"]');
+  await page.waitForTimeout(400);
+  const quarterRev = parseFloat((await page.textContent('#staBig')).replace('+', ''));
+  ok(`reversing runs the stationing the other way (${quarter.toFixed(1)} -> ${quarterRev.toFixed(1)})`,
+     Math.abs((quarter + quarterRev) / 2 - 2000) < 2, `${quarter} / ${quarterRev}`);
+  await page.click('.tab[data-tab="project"]');
+  await page.click('#btnReverse');   // put it back for the tests that follow
+  await page.fill('#inpStaStart', '0+00');
+  await page.dispatchEvent('#inpStaStart', 'change');
+  await ctx.setGeolocation({ latitude: 33.8001, longitude: -117.195, accuracy: 4 });
+  await page.waitForTimeout(500);
+  await page.click('.tab[data-tab="track"]');
+
   /* ---------------- UI: pins ---------------- */
   console.log('\n— UI: pins —');
   await page.fill('#markNote', 'hydrant');

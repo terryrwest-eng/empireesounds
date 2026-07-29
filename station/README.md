@@ -23,9 +23,13 @@ for itself.
 | **GeoJSON** | lat / lon | LineString, MultiLineString, Polygon rings, Points. |
 | **CSV / point file** | either | Headers like `lat,lon` or `northing,easting`, or a headerless PNEZD point file. |
 
-If a file holds several lines, you pick which one is the centreline. Everything
-else (ditch lines, edge of pavement, parcel boundaries) is offered too, so the
-same file can be re-used for a different feature.
+A LandXML with several `<Alignment>` elements adds all of them. Any other file
+adds a line at a time, and everything else it holds (ditch lines, edge of
+pavement, parcel boundaries) is offered alongside, so one file can serve several
+features.
+
+Only LandXML carries stationing. See **When the file has no stationing** below
+for the other formats.
 
 ## Georeferencing
 
@@ -178,6 +182,39 @@ worth having: you rarely know at the time which line the question will be about.
 
 All the alignments in a project share one georeference, so control set on one
 line ties down the rest.
+
+## When the file has no stationing
+
+A LandXML alignment states its own stationing. **A DXF polyline, a KML line or a
+GPX track states nothing** — there is no start station in the file, and no
+guarantee the line was even drawn in the direction the plan runs. Until it is
+told, 0+00 is simply whichever end the file happened to draw first, and the app
+says so rather than presenting a guess as a fact.
+
+Three ways to set it, on the Setup tab:
+
+- **Type the start station.** Fine when you know the line starts at, say, 10+00.
+- **Use my position.** Stand on something you know — a stake, a manhole, a
+  station mark — enter what it reads, and Apply. The whole stationing shifts so
+  that point reads what you said. This is the one that gets used in the field.
+- **Pick on the plan.** Tap the point on the line instead of standing on it. The
+  tap snaps to the centreline, because a station is a point *on* the alignment.
+
+**Reverse direction** flips which end is the start, for a line drawn backwards
+from the plan.
+
+Calibration moves the whole stationing, station equations included, so relative
+distances along the line are never disturbed. It also reports the shift it made
+and warns if the point you used is well off the line or past its end.
+
+### Stations follow the line, not the moment
+
+Recorded stations are recomputed whenever an alignment is added, removed,
+calibrated or reversed. Crews pin things all morning and set the stationing at
+lunch, and those pins have to end up right — so the **position** is what is
+recorded as observed, and the station is read off the line as it stands now.
+Fix quality, satellites and accuracy stay frozen at capture, because those are
+observations rather than derivations.
 
 ## How stationing is worked out
 

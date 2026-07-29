@@ -230,7 +230,11 @@ function addAlignment(parsed, line) {
     coords: line.coords,
     points: parsed.points || [],
     staStart: line.staStart ?? 0,
-    equations: (line.equations || []).map(e => ({ along: e.dist, ahead: e.ahead }))
+    equations: (line.equations || []).map(e => ({ along: e.dist, ahead: e.ahead })),
+    // LandXML states its stationing; a DXF polyline or a KML line does not, and
+    // until someone says otherwise 0+00 is just wherever the file happened to
+    // start drawing.
+    stationed: parsed.source === 'LandXML'
   };
   state.alignments.push(def);
   if (!state.activeId) state.activeId = def.id;
@@ -304,6 +308,53 @@ function removeAlignment(id) {
   save();
   renderProjectTab();
   renderLog();
+}
+
+/**
+ * Shift a whole alignment's stationing so that a point on it reads a known
+ * value. This is how a DXF polyline — which carries no stationing at all —
+ * becomes usable: stand on something you know the station of, and say so.
+ */
+function calibrateStation(value, atX, atY) {
+  const def = activeDef();
+  const al = state.alignment;
+  if (!def || !al) return { ok: false, error: 'No alignment is loaded.' };
+  if (value == null) return { ok: false, error: 'Enter the station you are standing on.' };
+  if (atX == null) return { ok: false, error: 'No position — start GPS, or tap the line on the plan.' };
+
+  const proj = al.project(atX, atY);
+  if (!proj) return { ok: false, error: 'Could not find that point on the line.' };
+
+  // Move the whole stationing, equations and all, so relative distances hold.
+  const delta = value - proj.station;
+  def.staStart += delta;
+  (def.equations || []).forEach(e => { e.ahead += delta; });
+  def.stationed = true;
+
+  build();
+  save();
+  renderProjectTab();
+  return { ok: true, delta, offset: proj.offsetDisplay, beyond: !proj.onLine };
+}
+
+/**
+ * Flip which end is the start. A line drawn from the far end stations backwards,
+ * and nothing in a DXF says which way the plan runs.
+ */
+function reverseAlignment() {
+  const def = activeDef();
+  const al = state.alignment;
+  if (!def || !al) return;
+  const lengthDisplay = al.lengthDisplay;
+  def.coords = def.coords.slice().reverse();
+  // Equations are measured from the start, so they move to the other end.
+  def.equations = (def.equations || [])
+    .map(e => ({ along: lengthDisplay - e.along, ahead: e.ahead }))
+    .sort((a, b) => a.along - b.along);
+  def.reversed = !def.reversed;
+  build();
+  save();
+  renderProjectTab();
 }
 
 function setActiveAlignment(id) {
@@ -1372,7 +1423,23 @@ function exportMeasurementsGeo() {
 const toUnit = (metres, unit) => unit === 'ft' ? metres / footMetres() : metres;
 
 /** One tap on the map means different things depending on what you are doing. */
+let calibrationPoint = null;
+let calibratePicking = false;
+
 function onMapTap(x, y, pinIndex) {
+  if (calibratePicking) {
+    // Snap to the line: a station is a point on the alignment, not beside it.
+    const al = state.alignment;
+    const proj = al ? al.project(x, y) : null;
+    calibrationPoint = proj ? proj.snap : [x, y];
+    calibratePicking = false;
+    $('btnCalibratePick').classList.remove('is-on');
+    flash($('calMsg'), '', proj
+      ? `Point picked at ${formatStation(proj.station, state.interval, state.decimals)} as it stands. Enter what it should read, then Apply.`
+      : 'Point picked. Enter the station it should read, then Apply.');
+    showTab('project');
+    return;
+  }
   if (state.measure.active) {
     // Tapping a pin measures from the pin itself, not from a thumb-width away.
     const pin = pinIndex != null ? state.marks[pinIndex] : null;
@@ -1489,14 +1556,38 @@ function selectPin(index) {
 function refreshMarkXY() {
   // Marks store lat/lon, so they survive a re-georeference — recompute the
   // local metres they are drawn at.
-  if (!state.frame) { view.marks = state.marks.filter(m => m.x != null); return; }
-  for (const m of state.marks) {
-    if (m.lat != null && m.lon != null) {
-      const [x, y] = state.frame.toXY(m.lat, m.lon);
-      m.x = x; m.y = y;
+  if (state.frame) {
+    for (const m of state.marks) {
+      if (m.lat != null && m.lon != null) {
+        const [x, y] = state.frame.toXY(m.lat, m.lon);
+        m.x = x; m.y = y;
+      }
     }
   }
-  view.marks = state.marks;
+  restation();
+  view.marks = state.frame ? state.marks : state.marks.filter(m => m.x != null);
+}
+
+/**
+ * Recompute every recorded station from the position that was observed.
+ *
+ * The position is the measurement; the station is a reading off a line that may
+ * be added, removed or calibrated later. Crews pin things all morning and set
+ * the stationing at lunch, and those pins have to end up right.
+ */
+function restation() {
+  const readAt = (p) => {
+    if (p.x == null) return;
+    const stations = stationsAt(p.x, p.y);
+    if (!stations.length) { p.stations = []; return; }
+    p.stations = stations;
+    const primary = stations.find(st => st.id === (p.alignmentId ?? state.activeId)) || stations[0];
+    p.station = primary.station;
+    p.offset = primary.offset;
+  };
+  state.marks.forEach(readAt);
+  state.measure.points.forEach(readAt);
+  state.saved.forEach(entry => entry.points.forEach(readAt));
 }
 
 function renderLog() {
@@ -1687,6 +1778,9 @@ function renderProjectTab() {
 
   const al = state.alignment;
   const def = activeDef();
+  // LandXML states its stationing. Everything else is measured from the end of
+  // the line the file happens to start at, which is a guess until it is told.
+  $('noStationing').hidden = !def || !!def.stationed;
   $('alignSummary').textContent = al
     ? `${al.name} · ${fmt(al.lengthDisplay, 2)} ${unitLabel()} long · ` +
       `${formatStation(al.stationAt(0), state.interval, state.decimals)} to ${formatStation(al.stationAt(al.length), state.interval, state.decimals)}` +
@@ -2139,8 +2233,39 @@ function bind() {
   $('inpStaStart').onchange = e => {
     const v = parseStation(e.target.value, state.interval);
     const def = activeDef();
-    if (def) def.staStart = v ?? 0;
+    if (def) { def.staStart = v ?? 0; def.stationed = true; }
     syncSettingsInputs(); build(); save(); renderProjectTab();
+  };
+
+  $('btnReverse').onclick = reverseAlignment;
+  $('btnCalibrate').onclick = () => {
+    const msg = $('calMsg');
+    const value = parseStation($('inpCalStation').value, state.interval);
+    const at = calibrationPoint;
+    const r = calibrateStation(value, at ? at[0] : null, at ? at[1] : null);
+    if (!r.ok) return flash(msg, 'err', r.error);
+    $('inpCalStation').value = '';
+    const u = unitLabel();
+    flash(msg, 'ok',
+      `Stationing shifted by ${fmt(r.delta, 2)} ${u}. That point now reads ` +
+      `${formatStation(value, state.interval, state.decimals)}` +
+      (Math.abs(r.offset) > 0.5 ? `, ${formatOffset(r.offset, u, 2)} off the line.` : '.') +
+      (r.beyond ? ' It is past the end of the drawn line, so treat it as an extension.' : ''));
+    calibrationPoint = null;
+    $('btnCalibratePick').classList.remove('is-on');
+  };
+  $('btnCalibrateHere').onclick = () => {
+    if (!lastFix || lastFix.x == null) return flash($('calMsg'), 'err', 'No position yet.');
+    calibrationPoint = [lastFix.x, lastFix.y];
+    flash($('calMsg'), '', 'Using your position. Enter the station it should read, then Apply.');
+  };
+  $('btnCalibratePick').onclick = () => {
+    calibratePicking = !calibratePicking;
+    $('btnCalibratePick').classList.toggle('is-on', calibratePicking);
+    if (calibratePicking) {
+      flash($('calMsg'), '', 'Tap the point on the plan, then enter its station.');
+      showTab('track');
+    }
   };
 
   $('btnAddEq').onclick = () => {

@@ -312,6 +312,24 @@
     </div>
     <p class="muted" id="alignSummary"></p>
 
+    <div class="msg warn" id="noStationing" hidden>
+      This file carries no stationing, so 0+00 is simply the end of the line the
+      file starts at. Set it below — either type the start station, or stand on
+      something you know and tell the app what it reads.
+    </div>
+
+    <h3>Set the stationing</h3>
+    <div class="row-gap">
+      <button type="button" class="btn ghost" id="btnCalibrateHere">Use my position</button>
+      <button type="button" class="btn ghost" id="btnCalibratePick">Pick on the plan</button>
+      <button type="button" class="btn ghost" id="btnReverse">Reverse direction</button>
+    </div>
+    <div class="goto-row spaced">
+      <input id="inpCalStation" type="text" inputmode="decimal" placeholder="that point reads 12+50">
+      <button type="button" class="btn" id="btnCalibrate">Apply</button>
+    </div>
+    <div class="msg" id="calMsg" hidden></div>
+
     <details id="eqBlock">
       <summary>Station equations <span class="count" id="eqCount">0</span></summary>
       <div id="eqList" class="eqlist"></div>
