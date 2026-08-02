@@ -4,21 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Empire Sounds — Car Audio, Cameras &amp; Installation | Perris, CA</title>
-<meta name="description" content="Car audio installation in Perris, CA. Subwoofers, amps, component speakers, CarPlay head units, backup and dash cameras, sound deadening. 4.8 stars from 75 reviews. 3895 N Perris Blvd. Call (951) 605-2352.">
+<meta name="description" content="Car audio installation in Perris, CA. Subwoofers, amps, component speakers, CarPlay head units, backup and dash cameras, sound deadening. Free written estimate before any work. 3895 N Perris Blvd. Call (951) 605-2352.">
 <meta name="theme-color" content="#14100E">
 <link rel="canonical" href="https://empireesounds-production.up.railway.app/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="business.business">
 <meta property="og:site_name" content="Empire Sounds">
 <meta property="og:title" content="Empire Sounds — Car Audio &amp; Installation, Perris CA">
-<meta property="og:description" content="Custom car audio and fabrication in Perris, CA. Subwoofers, amplifiers, speakers, screens and cameras. 4.8 from 75 reviews. 3895 N Perris Blvd.">
+<meta property="og:description" content="Custom car audio and fabrication in Perris, CA. Subwoofers, amplifiers, speakers, screens and cameras. Free written estimate before any work. 3895 N Perris Blvd.">
 <meta property="og:url" content="https://empireesounds-production.up.railway.app/">
 <meta property="og:image" content="https://empireesounds-production.up.railway.app/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Empire Sounds — Car Audio &amp; Installation, Perris CA">
-<meta name="twitter:description" content="Custom car audio and fabrication in Perris, CA. 4.8 from 75 reviews.">
+<meta name="twitter:description" content="Custom car audio and fabrication in Perris, CA. Free written estimate before any work.">
 <meta name="twitter:image" content="https://empireesounds-production.up.railway.app/og.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -306,26 +306,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 .svc ul{margin:.15rem 0 0;padding-left:1.05rem;color:var(--ash);font-size:.89rem}
 .svc li{margin:.3rem 0}
 
-/* ---------- photos ---------- */
-.shots{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin:0}
-.shot{
-  aspect-ratio:4/3;background:var(--panel-hi);
-  border:1px dashed rgba(236,226,210,.26);
-  display:flex;align-items:center;justify-content:center;text-align:center;
-  font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--ash);padding:1rem;
-}
-.shot--tall{aspect-ratio:3/4}
-/* real install photos dropped into the .shots grids */
-.shot-photo{margin:0;position:relative}
-.shot-photo img{
-  width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;
-}
-.shot-photo--tall img{aspect-ratio:3/4}
-.shot-photo figcaption{
-  font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--ash);margin:.7rem 0 0;
-}
+/* ---------- photos ----------
+   Only the hero carries a photo now. The gallery rules that used to sit here
+   (.shots/.shot/.shot-photo/.fit-photo) went out with the images they styled —
+   see the README for why those images are gone. Restore from git history if
+   real shop photography lands in those slots. */
 /* clipping frame so photos can drift on hover without bleeding over captions */
 .frame{
   display:block;overflow:hidden;position:relative;
@@ -344,25 +329,64 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 }
 /* the overscale gives the drift room to move without exposing an edge */
 .frame{clip-path:inset(0)}
-/* photos settle into the frame instead of appearing in it */
-.shot-photo .frame,.hero-shot .frame{clip-path:inset(12% 0 12% 0);transition:clip-path .9s var(--ease)}
-.shot-photo.reveal.in .frame,.hero-shot .frame{clip-path:inset(0)}
+.hero-shot .frame{clip-path:inset(0);transition:clip-path .9s var(--ease)}
 .frame::after{
   content:"";position:absolute;inset:0;pointer-events:none;
   background:linear-gradient(200deg,rgba(201,169,107,.16),transparent 42%);
   opacity:0;transition:opacity .7s var(--ease);
 }
-.hero-shot:hover .frame img,
-.shot-photo:hover .frame img{--s:1.15;filter:saturate(1.06) brightness(1.04)}
-.hero-shot:hover .frame::after,
-.shot-photo:hover .frame::after{opacity:1}
+.hero-shot:hover .frame img{--s:1.15;filter:saturate(1.06) brightness(1.04)}
+.hero-shot:hover .frame::after{opacity:1}
 /* the offset gold rule slides into register on hover */
 .hero-shot::before{transition:inset .6s var(--ease),border-color .6s var(--ease)}
 .hero-shot:hover::before{inset:-8px 8px 8px -8px;border-color:var(--candy)}
 
-.fit-photo{margin:0}
-.fit-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid rgba(236,226,210,.22)}
-.fit-photo figcaption{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ash);margin:.7rem 0 0}
+/* ---------- pricing ---------- */
+.price-in{max-width:var(--max);margin:0 auto;display:grid;gap:clamp(2rem,5vw,4rem)}
+@media(min-width:940px){.price-in{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);align-items:start}}
+.price-list{margin:0;padding:0;list-style:none;border-top:var(--hair)}
+.price-list li{padding:1.15rem 0;border-bottom:var(--hair);display:grid;gap:.4rem}
+.price-list b{font-weight:600;font-size:1.05rem;color:var(--bone)}
+.price-list span{color:var(--ash);font-size:.97rem}
+.price-note{
+  margin:1.75rem 0 0;padding:1.15rem 1.25rem;background:var(--midnight);
+  border-left:2px solid var(--candy);
+  font-size:.97rem;color:var(--ash);
+}
+.price-note b{color:var(--bone);font-weight:600}
+
+/* ---------- areas served ---------- */
+.areas{margin:1.5rem 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:.5rem}
+.areas li{
+  font-family:var(--mono);font-size:.74rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ash);border:1px solid rgba(236,226,210,.18);padding:.42rem .7rem;
+}
+
+/* ---------- who you're dealing with ---------- */
+.owner{
+  margin:0;padding:clamp(1.5rem,3vw,2rem);
+  background:var(--midnight);border:1px solid rgba(201,169,107,.35);
+}
+.owner .who{
+  font-family:var(--display);font-weight:400;text-transform:uppercase;
+  font-size:clamp(1.3rem,1.1rem + .8vw,1.7rem);line-height:1;margin:0;color:var(--bone);
+}
+.owner .role{
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--candy);margin:.6rem 0 0;
+}
+.owner p{margin:1.1rem 0 0;color:var(--ash);font-size:.99rem}
+.owner-links{margin:1.35rem 0 0;padding:0;list-style:none;display:grid;gap:.55rem}
+.owner-links li{display:grid;gap:.2rem}
+.owner-links span{
+  font-family:var(--mono);font-size:.65rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ash);
+}
+.owner-links a{
+  color:var(--bone);font-size:1.02rem;font-weight:600;
+  text-decoration-thickness:1px;text-underline-offset:3px;word-break:break-word;
+}
+.owner-links a:hover{color:var(--candy)}
 
 /* ---------- reviews ---------- */
 .revs{display:grid;gap:1px;background:rgba(236,226,210,.12);border:1px solid rgba(236,226,210,.12);grid-template-columns:repeat(auto-fit,minmax(min(100%,275px),1fr))}
@@ -405,7 +429,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
   .btn:hover,.svc:hover,.tel:hover,.rev:hover{transform:none}
   .frame img,.hero-shot::before{transition:none}
   .frame img{transform:none;--s:1}
-  .shot-photo .frame,.hero-shot .frame{clip-path:none;transition:none}
+  .hero-shot .frame{clip-path:none;transition:none}
   .progress{display:none}
 }
 </style>
@@ -417,8 +441,9 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 <header class="bar">
   <a class="mark chrome" href="#top">Empire Sounds</a>
   <nav aria-label="Sections">
+    <a href="#fit">Fabrication</a>
     <a href="#services">Services</a>
-    <a href="#fit">Custom fits</a>
+    <a href="#pricing">Pricing</a>
     <a href="#reviews">Reviews</a>
     <a href="#visit">Visit</a>
   </nav>
@@ -451,7 +476,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 
 <div class="stats">
   <div class="stat reveal"><b><span data-count="4.8" data-dec="1">0.0</span></b><span><i class="st">★★★★★</i> · 75 Google reviews</span></div>
-  <div class="stat reveal"><b>Same day</b><span>On most installs</span></div>
+  <div class="stat reveal"><b>Same day</b><span>Ask when you call</span></div>
   <div class="stat reveal"><b><span data-count="6">0</span>&nbsp;days</b><span>Open Mon–Sat</span></div>
   <div class="stat reveal"><b>Perris</b><span>N Perris Blvd</span></div>
 </div>
@@ -468,17 +493,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
         <li>Factory harness, chime, and steering wheel control retention</li>
       </ul>
     </div>
-    <div class="shots">
-      <figure class="shot-photo shot-photo--tall reveal">
-        <span class="frame"><img src="door-build.jpg" width="765" height="1024" loading="lazy"
-             alt="Layered birch plywood speaker pod holding two drivers, mounted in a stripped truck door over sound deadening, with a braided wiring loom clipped along the panel."></span>
-        <figcaption>Door build — plywood speaker pod</figcaption>
-      </figure>
-      <figure class="shot-photo shot-photo--tall reveal">
-        <span class="frame"><img src="amp-rack.jpg" width="1200" height="1600" loading="lazy"
-             alt="Show trunk build with an illuminated brass and gold amplifier display under acrylic, navy trim panels, and a subwoofer in the side well."></span>
-        <figcaption>Amp rack — custom show trunk</figcaption>
-      </figure>
+    <div class="reveal">
+      <p class="lede">Bring the vehicle by and we'll tell you straight whether the fit is worth doing, what it takes, and what it costs — before anything comes apart.</p>
+      <div class="acts">
+        <a class="btn btn--ghost" href="#pricing">How pricing works</a>
+      </div>
     </div>
   </div>
 </section>
@@ -548,31 +567,75 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
   </div>
 </section>
 
-<section class="sec sec--panel">
-  <div class="sec-in">
-    <div class="sec-head reveal">
-      <h2 class="chrome">Recent work</h2>
+<section class="sec sec--panel" id="pricing">
+  <div class="price-in">
+    <div class="reveal">
+      <h2 class="chrome">Pricing</h2>
+      <p class="lede">You get the number in writing before anything comes apart. The quote is the price.</p>
+      <div class="acts">
+        <a class="btn btn--solid" href="tel:+19516052352">Get a quote</a>
+      </div>
     </div>
-    <div class="shots">
-      <figure class="shot-photo reveal">
-        <span class="frame"><img src="door-pod.jpg" width="1024" height="559" loading="lazy"
-             alt="Molded and painted door panel in a blue truck holding three speakers, finished to match the factory paint."></span>
-        <figcaption>Molded door panel — color matched</figcaption>
-      </figure>
-      <figure class="shot-photo reveal">
-        <span class="frame"><img src="sub-enclosure.jpg" width="1600" height="898" loading="lazy"
-             alt="Blue-lit subwoofer enclosure in a sedan trunk with two amplifiers on a shelf above and an illuminated etched panel below."></span>
-        <figcaption>Sub enclosure — trunk build</figcaption>
-      </figure>
+    <div class="reveal">
+      <ul class="price-list">
+        <li>
+          <b>The estimate is free</b>
+          <span>Bring the vehicle in and we'll look at it with you. No charge for the look, no charge for the quote, no pressure to book it.</span>
+        </li>
+        <li>
+          <b>Written before we start</b>
+          <span>Labor and parts itemised on paper. Nothing gets touched until you've seen the number and said yes.</span>
+        </li>
+        <li>
+          <b>The quote is the price</b>
+          <span>If something unexpected turns up mid‑job, we stop and call you. No new line items appearing at pickup.</span>
+        </li>
+        <li>
+          <b>What moves the number</b>
+          <span>The vehicle, whether panels need fabrication, whether you're bringing your own gear or we're supplying it, and how much wiring the job actually needs.</span>
+        </li>
+        <li>
+          <b>What's included either way</b>
+          <span>Correct‑gauge wire, proper fusing at the battery, a solid chassis ground, and the loom tied inside the panel. Those aren't upsells here.</span>
+        </li>
+        <li>
+          <b>Your own gear is fine</b>
+          <span>Bought it online and need it fitted? Bring it. We'll tell you honestly if it's wrong for the vehicle before you're into it for labor.</span>
+        </li>
+      </ul>
+      <p class="price-note"><b>Why there's no price list on this page.</b> Two identical‑looking installs can differ by hours once the panels are off. Publishing a number we'd have to walk back would waste your time and ours — so we quote the vehicle in front of us, in writing, for free.</p>
     </div>
   </div>
 </section>
+
+<!-- ==========================================================================
+     PRICE LIST — ready to switch on.
+     ==========================================================================
+     Terry: send me your real starting figures and I'll drop them in. Until
+     then this stays commented out, because publishing invented prices on a
+     live business site is worse than publishing none.
+
+     To use it: delete this comment wrapper, replace every 000 with your
+     number, and delete any row you don't want listed.
+
+     <ul class="price-list">
+       <li><b>Subwoofer + sealed box install</b><span>From $000 labor</span></li>
+       <li><b>Custom fiberglass enclosure</b><span>From $000</span></li>
+       <li><b>Amplifier install, wired and fused</b><span>From $000</span></li>
+       <li><b>Component speaker set, front pair</b><span>From $000 labor</span></li>
+       <li><b>Head unit / CarPlay, harness retained</b><span>From $000 labor</span></li>
+       <li><b>Backup camera</b><span>From $000</span></li>
+       <li><b>Dash cam, hardwired to the fuse box</b><span>From $000</span></li>
+       <li><b>Sound deadening, per door</b><span>From $000</span></li>
+       <li><b>Shop labor rate</b><span>$000 / hour</span></li>
+     </ul>
+     ========================================================================== -->
 
 <section class="sec" id="reviews">
   <div class="sec-in">
     <div class="sec-head reveal">
       <h2 class="chrome">Reviews</h2>
-      <p class="lede">4.8 from 75 reviews on Google.</p>
+      <p class="lede">4.8 from 75 reviews on Google. Every quote below is a customer's own words, shortened — the full text is on the listing.</p>
     </div>
     <div class="revs">
       <figure class="rev reveal">
@@ -600,6 +663,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
       <a class="btn btn--solid" href="https://search.google.com/local/reviews?placeid=ChIJD1duYjOh3IARfOLGZBUuM80">Read all 75 reviews</a>
       <a class="btn btn--ghost" href="https://search.google.com/local/writereview?placeid=ChIJD1duYjOh3IARfOLGZBUuM80">Leave a review</a>
     </div>
+    <p class="rev-note reveal">Rating and count read from the Google listing on 2 August 2026. The listing is live — check it against this page.</p>
     </div>
 </section>
 
@@ -610,7 +674,8 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
       <p class="lede">Walk‑ins welcome. Bring the vehicle and we'll look at it with you instead of guessing over the phone.</p>
       <ul class="info">
         <li><span>Address</span><b><a href="https://www.google.com/maps/search/?api=1&amp;query=Empire+Sounds+3895+N+Perris+Blvd+Perris+CA+92571">3895 N Perris Blvd, Ste B3<br>Perris, CA 92571</a></b></li>
-        <li><span>Phone</span><b><a href="tel:+19516052352">(951) 605‑2352</a></b></li>
+        <li><span>Shop phone</span><b><a href="tel:+19516052352">(951) 605‑2352</a></b></li>
+        <li><span>Email</span><b><a href="mailto:Terry.West@packetreadyconsulting.com">Terry.West@packetreadyconsulting.com</a></b></li>
         <li><span>Hours</span>
           <ul class="hours">
             <li><span>Monday</span><span>9:00 – 6:00</span></li>
@@ -635,6 +700,30 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
         loading="lazy"
         referrerpolicy="no-referrer-when-downgrade"
         src="https://www.google.com/maps?q=3895+N+Perris+Blvd+Perris+CA+92571&output=embed"></iframe>
+
+      <figure class="owner reveal" style="margin-top:1.5rem">
+        <p class="who">Terry West</p>
+        <p class="role">Owner · Empire Sounds</p>
+        <p>If something about your job isn't right, it comes to me — not to a queue. Call the shop first for scheduling and quotes; use the line below if you've already been in and need to reach me directly.</p>
+        <ul class="owner-links">
+          <li><span>Direct line</span><a href="tel:+19516397054">(951) 639‑7054</a></li>
+          <li><span>Email</span><a href="mailto:Terry.West@packetreadyconsulting.com">Terry.West@packetreadyconsulting.com</a></li>
+        </ul>
+      </figure>
+
+      <div class="reveal" style="margin-top:1.5rem">
+        <p class="eyebrow" style="margin-bottom:.5rem">Areas served</p>
+        <ul class="areas">
+          <li>Perris</li>
+          <li>Moreno Valley</li>
+          <li>Menifee</li>
+          <li>Riverside</li>
+          <li>Sun City</li>
+          <li>Nuevo</li>
+          <li>Lake Elsinore</li>
+          <li>Hemet</li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
@@ -642,9 +731,11 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 
 <footer class="foot">
   <div class="foot-in">
-    <p>Empire Sounds · 3895 N Perris Blvd Ste B3, Perris, CA 92571 · (951) 605‑2352</p>
+    <p>Empire Sounds · 3895 N Perris Blvd Ste B3, Perris, CA 92571 · (951) 605‑2352<br>
+       Owner: Terry West · <a href="mailto:Terry.West@packetreadyconsulting.com" style="color:inherit">Terry.West@packetreadyconsulting.com</a></p>
     <nav aria-label="Footer">
       <a href="#services">Services</a>
+      <a href="#pricing">Pricing</a>
       <a href="#reviews">Reviews</a>
       <a href="#visit">Visit</a>
     </nav>
@@ -654,10 +745,26 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
 <script type="application/ld+json">
 {
   "@context":"https://schema.org",
-  "@type":"AutoPartsStore",
+  "@type":"AutoRepair",
+  "additionalType":"https://en.wikipedia.org/wiki/Vehicle_audio",
   "name":"Empire Sounds",
   "description":"Car audio and 12-volt installation in Perris, California. Subwoofers, amplifiers, component speakers, CarPlay head units, backup and dash cameras, and sound deadening.",
+  "url":"https://empireesounds-production.up.railway.app/",
+  "image":"https://empireesounds-production.up.railway.app/og.jpg",
   "telephone":"+1-951-605-2352",
+  "email":"Terry.West@packetreadyconsulting.com",
+  "founder":{
+    "@type":"Person",
+    "name":"Terry West",
+    "jobTitle":"Owner",
+    "telephone":"+1-951-639-7054",
+    "email":"Terry.West@packetreadyconsulting.com"
+  },
+  "contactPoint":[
+    {"@type":"ContactPoint","contactType":"sales","telephone":"+1-951-605-2352","areaServed":"US","availableLanguage":"English"},
+    {"@type":"ContactPoint","contactType":"customer support","telephone":"+1-951-639-7054","email":"Terry.West@packetreadyconsulting.com","areaServed":"US","availableLanguage":"English"}
+  ],
+  "sameAs":["https://search.google.com/local/reviews?placeid=ChIJD1duYjOh3IARfOLGZBUuM80"],
   "address":{
     "@type":"PostalAddress",
     "streetAddress":"3895 N Perris Blvd Ste B3",
@@ -742,7 +849,7 @@ h1 .line > span{transform:translateY(110%);animation:riseup .85s var(--ease) for
   onScroll();
 
   // stagger each group's children so rows cascade instead of arriving together
-  document.querySelectorAll('.shots,.svc-grid,.revs,.stats,.info').forEach(function(group){
+  document.querySelectorAll('.svc-grid,.revs,.stats,.info,.price-list,.areas').forEach(function(group){
     Array.prototype.forEach.call(group.children, function(child, i){
       child.style.setProperty('--i', i);
     });
